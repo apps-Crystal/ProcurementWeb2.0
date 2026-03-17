@@ -1,26 +1,99 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+@theme {
+  --font-sans: "Inter", "Roboto", sans-serif;
+
+  /* Primary Palette */
+  --color-primary-50: #f0f4f8;
+  --color-primary-100: #d9e2ec;
+  --color-primary-200: #bcccdc;
+  --color-primary-300: #9fb3c8;
+  --color-primary-400: #829ab1;
+  --color-primary-500: #627d98;
+  --color-primary-600: #486581;
+  --color-primary-700: #334e68;
+  --color-primary-800: #243b53;
+  --color-primary-900: #1A3A5C;
+
+  /* Accent */
+  --color-accent-400: #d4b96a;
+  --color-accent-500: #C8A951;
+  --color-accent-600: #b39542;
+
+  /* Alerts */
+  --color-success: #2E7D32;
+  --color-warning: #F57C00;
+  --color-danger: #C62828;
+
+  /* Surface */
+  --color-background: #F5F6FA;
+  --color-surface: #FFFFFF;
+  --color-border: #E0E4ED;
+
+  /* Text */
+  --color-text-primary: #1C2B3A;
+  --color-text-secondary: #5A6A7A;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
+/* Base Styles */
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background-color: var(--color-background);
+  color: var(--color-text-primary);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ─── Custom Utility Classes ──────────────────────────────── */
+
+.enterprise-shadow {
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px -1px rgba(0, 0, 0, 0.1);
+}
+
+.enterprise-card {
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 2px;
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px -1px rgba(0, 0, 0, 0.1);
+}
+
+.enterprise-input {
+  display: flex;
+  height: 2.25rem;
+  width: 100%;
+  border-radius: 2px;
+  border: 1px solid var(--color-border);
+  background-color: var(--color-surface);
+  padding: 0.25rem 0.75rem;
+  font-size: 0.875rem;
+  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+  color: var(--color-text-primary);
+}
+
+.enterprise-input::placeholder {
+  color: var(--color-text-secondary);
+}
+
+.enterprise-input:focus-visible {
+  outline: none;
+  border-color: var(--color-primary-600);
+  box-shadow: 0 0 0 1px var(--color-primary-600);
+}
+
+.enterprise-input:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* Custom Scrollbar */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background-color: var(--color-primary-200);
+  border-radius: 3px;
 }
