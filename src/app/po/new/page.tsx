@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   ShoppingCart,
@@ -13,6 +13,14 @@ import {
   ExternalLink,
 } from "lucide-react";
 import { useCurrentUser } from "@/components/auth/AuthProvider";
+
+export default function CreatePOPageWrapper() {
+  return (
+    <Suspense fallback={<div className="flex items-center justify-center h-64"><Loader2 className="w-6 h-6 animate-spin text-primary-400" /></div>}>
+      <CreatePOPage />
+    </Suspense>
+  );
+}
 
 interface PRData {
   PR_ID?: string;
@@ -60,7 +68,7 @@ interface Vendor {
   CONTACT_EMAIL?: string;
 }
 
-export default function CreatePOPage() {
+function CreatePOPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const prId   = searchParams.get("pr")   ?? "";

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   Receipt,
@@ -20,7 +20,15 @@ interface MatchData {
   lines: Record<string, string>[];
 }
 
-export default function ThreeWayMatch() {
+export default function ThreeWayMatchWrapper() {
+  return (
+    <Suspense fallback={<div className="flex items-center justify-center h-96"><Loader2 className="w-8 h-8 animate-spin text-primary-600" /></div>}>
+      <ThreeWayMatch />
+    </Suspense>
+  );
+}
+
+function ThreeWayMatch() {
   const searchParams = useSearchParams();
   const matchId = searchParams.get("match_id");
   const invId = searchParams.get("inv_id");

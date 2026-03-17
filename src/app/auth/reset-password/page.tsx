@@ -1,8 +1,6 @@
 "use client";
 
-export const dynamic = "force-dynamic";
-
-import { useState, FormEvent } from "react";
+import { useState, FormEvent, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { Loader2, AlertTriangle, Eye, EyeOff, CheckCircle2, ShieldCheck, X, Check } from "lucide-react";
 import Link from "next/link";
@@ -17,6 +15,14 @@ function PasswordRule({ met, label }: { met: boolean; label: string }) {
 }
 
 export default function ResetPasswordPage() {
+  return (
+    <Suspense fallback={<div className="w-full max-w-md animate-pulse h-96" />}>
+      <ResetPasswordForm />
+    </Suspense>
+  );
+}
+
+function ResetPasswordForm() {
   const params = useSearchParams();
   const token = params.get("token") ?? "";
 

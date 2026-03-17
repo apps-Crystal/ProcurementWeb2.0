@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import {
   PackageCheck,
@@ -46,7 +46,15 @@ interface LineInspection {
   remarks: string;
 }
 
-export default function NewGRN() {
+export default function NewGRNWrapper() {
+  return (
+    <Suspense fallback={<div className="flex items-center justify-center h-64"><Loader2 className="w-6 h-6 animate-spin text-primary-400" /></div>}>
+      <NewGRN />
+    </Suspense>
+  );
+}
+
+function NewGRN() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const { user } = useCurrentUser();
