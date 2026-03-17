@@ -5,16 +5,18 @@
 
 import OpenAI from "openai";
 
-const client = new OpenAI({
-  baseURL: "https://openrouter.ai/api/v1",
-  apiKey: process.env.OPENROUTER_API_KEY!,
-  defaultHeaders: {
-    "HTTP-Referer": process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000",
-    "X-Title": "Crystal Group Procurement System",
-  },
-});
-
 const MODEL = "google/gemini-2.0-flash-001";
+
+function getClient() {
+  return new OpenAI({
+    baseURL: "https://openrouter.ai/api/v1",
+    apiKey: process.env.OPENROUTER_API_KEY!,
+    defaultHeaders: {
+      "HTTP-Referer": process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000",
+      "X-Title": "Crystal Group Procurement System",
+    },
+  });
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TYPES
@@ -104,7 +106,7 @@ Rules:
 - If a field cannot be determined, use empty string or 0
 - confidence_score should reflect overall extraction quality`;
 
-  const response = await client.chat.completions.create({
+  const response = await getClient().chat.completions.create({
     model: MODEL,
     messages: [
       {
@@ -167,7 +169,7 @@ Rules:
 - All amounts must be plain numbers (no currency symbols or commas)
 - If a field is missing, use empty string or 0`;
 
-  const response = await client.chat.completions.create({
+  const response = await getClient().chat.completions.create({
     model: MODEL,
     messages: [
       {
