@@ -11,6 +11,7 @@ import {
   ShieldAlert,
   Loader2,
 } from "lucide-react";
+import { fmtDate } from "@/lib/utils";
 
 type DBStatus =
   | "SUBMITTED"
@@ -72,9 +73,7 @@ export default function PaymentQueue() {
             amount: r.NET_PAYABLE
               ? `₹${parseFloat(r.NET_PAYABLE).toLocaleString("en-IN")}`
               : "—",
-            dueDate: r.PAYMENT_DUE_DATE
-              ? new Date(r.PAYMENT_DUE_DATE).toLocaleDateString("en-IN")
-              : "—",
+            dueDate: fmtDate(r.PAYMENT_DUE_DATE),
             stage: (STATUS_TO_STAGE[r.STATUS] ?? "L1") as StageKey,
             isMsme,
             priority: computePriority(r.PAYMENT_DUE_DATE, isMsme),

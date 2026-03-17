@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState, useEffect } from "react";
+import { useDropdowns, opts } from "@/hooks/useDropdowns";
 import { useRouter, useParams } from "next/navigation";
 import {
   Briefcase,
@@ -57,7 +58,7 @@ export default function EditSPR() {
   const [tdsApplicable, setTdsApplicable] = useState(false);
   const [tdsSection, setTdsSection] = useState("");
   const [deliveryLocation, setDeliveryLocation] = useState("");
-  const [siteOptions, setSiteOptions] = useState<{ value: string; label: string }[]>([]);
+  const dropdowns = useDropdowns("SITE", "SERVICE_CATEGORY", "ENGAGEMENT_TYPE", "PAYMENT_TERMS", "GST_PERCENT");
   const [qty, setQty] = useState("1");
   const [rate, setRate] = useState("");
   const [gstPercent, setGstPercent] = useState("18");
@@ -118,10 +119,6 @@ export default function EditSPR() {
       .catch(console.error)
       .finally(() => setLoadingDraft(false));
 
-    fetch("/api/dropdowns?list=SITE")
-      .then((r) => r.json())
-      .then((d) => { if (d.options?.length) setSiteOptions(d.options); })
-      .catch(console.error);
   }, [id]);
 
   async function callUpdate(submit: boolean) {
@@ -277,10 +274,12 @@ export default function EditSPR() {
                 <label className="block text-xs font-medium text-text-secondary mb-1">Service Category <span className="text-danger">*</span></label>
                 <select className="enterprise-input" value={serviceCategory} onChange={(e) => { setServiceCategory(e.target.value as ServiceCategory); setServiceSubcategory(""); }}>
                   <option value="">Select Category</option>
-                  <option value="One_Time">One-Time Service</option>
-                  <option value="Recurring_AMC">Recurring / AMC</option>
-                  <option value="Project">Project</option>
-                  <option value="Professional_Services">Professional Services</option>
+                  {opts(dropdowns, "SERVICE_CATEGORY", [
+                    { value: "One_Time", label: "One-Time Service" },
+                    { value: "Recurring_AMC", label: "Recurring / AMC" },
+                    { value: "Project", label: "Project" },
+                    { value: "Professional_Services", label: "Professional Services" },
+                  ]).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                 </select>
               </div>
 
@@ -302,8 +301,8 @@ export default function EditSPR() {
               <div>
                 <label className="block text-xs font-medium text-text-secondary mb-1">Delivery Location</label>
                 <select className="enterprise-input" value={deliveryLocation} onChange={(e) => setDeliveryLocation(e.target.value)}>
-                  {siteOptions.length === 0 && <option value="">Loading sites…</option>}
-                  {siteOptions.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+                  {!dropdowns["SITE"]?.length && <option value="">Loading sites…</option>}
+                  {opts(dropdowns, "SITE", []).map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
                 </select>
               </div>
 
@@ -360,8 +359,10 @@ export default function EditSPR() {
                     <label className="block text-xs font-medium text-text-secondary mb-1">Engagement Type</label>
                     <select className="enterprise-input" value={engagementType} onChange={(e) => setEngagementType(e.target.value)}>
                       <option value="">Select…</option>
-                      <option value="Retainer">Retainer</option>
-                      <option value="Per_Engagement">Per Engagement</option>
+                      {opts(dropdowns, "ENGAGEMENT_TYPE", [
+                        { value: "Retainer", label: "Retainer" },
+                        { value: "Per_Engagement", label: "Per Engagement" },
+                      ]).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                     </select>
                   </div>
                   <label className="flex items-center gap-2 text-xs text-text-secondary cursor-pointer">
@@ -382,9 +383,11 @@ export default function EditSPR() {
                 <span className="text-[10px] text-warning-800 font-bold uppercase tracking-wider">MSME — 45-day SLA applies</span>
               </div>
               <select className="enterprise-input" value={paymentTerms} onChange={(e) => setPaymentTerms(e.target.value)}>
-                <option value="Standard">Standard (30 days from invoice verif.)</option>
-                <option value="Advance">Advance</option>
-                <option value="Milestone-linked">Milestone-linked</option>
+                {opts(dropdowns, "PAYMENT_TERMS", [
+                  { value: "Standard", label: "Standard (30 days from invoice verif.)" },
+                  { value: "Advance", label: "Advance" },
+                  { value: "Milestone-linked", label: "Milestone-linked" },
+                ]).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
               </select>
             </div>
           </div>
@@ -447,7 +450,10 @@ export default function EditSPR() {
               <div>
                 <label className="block text-xs font-medium text-text-secondary mb-1">GST %</label>
                 <select className="enterprise-input" value={gstPercent} onChange={(e) => setGstPercent(e.target.value)}>
-                  <option value="0">0%</option><option value="5">5%</option><option value="12">12%</option><option value="18">18%</option><option value="28">28%</option>
+                  {opts(dropdowns, "GST_PERCENT", [
+                    { value: "0", label: "0%" }, { value: "5", label: "5%" },
+                    { value: "12", label: "12%" }, { value: "18", label: "18%" }, { value: "28", label: "28%" },
+                  ]).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                 </select>
               </div>
               <div>

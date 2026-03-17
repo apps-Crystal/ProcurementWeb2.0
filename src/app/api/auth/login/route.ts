@@ -12,7 +12,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { readSheet, updateRowWhere, appendRow, getNextSeq, writeAuditLog } from "@/lib/sheets";
+import { readSheet, updateRowWhere, writeAuditLog } from "@/lib/sheets";
 import {
   verifyPassword,
   signJwt,

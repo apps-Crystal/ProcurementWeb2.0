@@ -19,6 +19,7 @@ import {
   ShoppingCart,
 } from "lucide-react";
 import { useCurrentUser } from "@/components/auth/AuthProvider";
+import { fmtDate } from "@/lib/utils";
 
 type PRStatus = "SUBMITTED" | "APPROVED" | "REJECTED" | "DRAFT" | "CANCELLED" | "PO_CREATED";
 
@@ -282,9 +283,7 @@ export default function PRDetailPage() {
               <div>
                 <p className="text-[11px] text-text-secondary uppercase tracking-wider font-medium">Expected Delivery</p>
                 <p className="font-medium text-primary-900 mt-0.5">
-                  {pr.EXPECTED_DELIVERY_DATE
-                    ? new Date(pr.EXPECTED_DELIVERY_DATE).toLocaleDateString("en-IN")
-                    : "—"}
+                  {fmtDate(pr.EXPECTED_DELIVERY_DATE)}
                 </p>
               </div>
               <div>
@@ -515,7 +514,7 @@ export default function PRDetailPage() {
               )}
               {pr.APPROVER_ACTION_DATE && (
                 <p className="text-xs text-text-secondary">
-                  On: {new Date(pr.APPROVER_ACTION_DATE).toLocaleDateString("en-IN")}
+                  On: {fmtDate(pr.APPROVER_ACTION_DATE)}
                 </p>
               )}
               {pr.APPROVER_REMARKS && (

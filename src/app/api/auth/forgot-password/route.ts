@@ -13,7 +13,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { readSheet, updateRowWhere, appendRow, getNextSeq, writeAuditLog } from "@/lib/sheets";
+import { readSheet, updateRowWhere, appendRowByFields, writeAuditLog } from "@/lib/sheets";
 import { generateResetToken, resetTokenExpiry } from "@/lib/auth";
 
 async function ensureAuthRow(userId: string) {
@@ -21,7 +21,7 @@ async function ensureAuthRow(userId: string) {
   const exists = rows.find((r) => r.USER_ID === userId);
   if (!exists) {
     // Create a blank auth row for this user
-    await appendRow("USER_AUTH", [userId, "", "0", "", ""]);
+    await appendRowByFields("USER_AUTH", { USER_ID: userId, PASSWORD_HASH: "", FAILED_LOGIN_COUNT: "0", RESET_TOKEN: "", RESET_TOKEN_EXPIRY: "" });
   }
 }
 

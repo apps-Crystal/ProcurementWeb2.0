@@ -8,6 +8,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { readSheet, updateRowWhere, writeAuditLog } from "@/lib/sheets";
+import { fmtDate } from "@/lib/utils";
 
 function htmlPage(title: string, heading: string, body: string, isError = false) {
   return `<!DOCTYPE html>
@@ -147,7 +148,7 @@ export async function GET(
            <strong>PO Number:</strong> ${po.PO_ID}<br>
            <strong>Vendor:</strong> ${po.VENDOR_NAME ?? "—"}<br>
            <strong>Total Value:</strong> ₹${parseFloat(po.GRAND_TOTAL ?? "0").toLocaleString("en-IN", { minimumFractionDigits: 2 })}<br>
-           <strong>Delivery Date:</strong> ${po.DELIVERY_DATE ? new Date(po.DELIVERY_DATE).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : "—"}
+           <strong>Delivery Date:</strong> ${fmtDate(po.DELIVERY_DATE)}
          </div>
          <p>This Purchase Order has already been acknowledged. No further action is needed.</p>
          <p>If you have questions about your order, please contact us at <a href="mailto:apps@crystalgroup.com">apps@crystalgroup.com</a>.</p>`
@@ -192,7 +193,7 @@ export async function GET(
          <strong>PO Number:</strong> ${po.PO_ID}<br>
          <strong>Vendor:</strong> ${po.VENDOR_NAME ?? "—"}<br>
          <strong>Total Value:</strong> ₹${parseFloat(po.GRAND_TOTAL ?? "0").toLocaleString("en-IN", { minimumFractionDigits: 2 })}<br>
-         <strong>Delivery Date:</strong> ${po.DELIVERY_DATE ? new Date(po.DELIVERY_DATE).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : "—"}<br>
+         <strong>Delivery Date:</strong> ${fmtDate(po.DELIVERY_DATE)}<br>
          <strong>Delivery Location:</strong> ${po.DELIVERY_LOCATION ?? "—"}
        </div>
        <p><strong>Next step:</strong> Please review and formally accept this order to confirm your intent to fulfil delivery as per the agreed terms.</p>

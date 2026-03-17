@@ -16,6 +16,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { useCurrentUser } from "@/components/auth/AuthProvider";
+import { fmtDate } from "@/lib/utils";
 
 interface POLine {
   LINE_ID: string;
@@ -272,7 +273,7 @@ export default function NewGRN() {
                   <p><span className="text-text-secondary">PO:</span> {poData.PO_ID}</p>
                   <p><span className="text-text-secondary">Vendor:</span> {poData.VENDOR_NAME}</p>
                   <p><span className="text-text-secondary">Value:</span> ₹{parseFloat(poData.PO_TOTAL || "0").toLocaleString("en-IN")}</p>
-                  <p><span className="text-text-secondary">Delivery:</span> {poData.DELIVERY_DATE ? new Date(poData.DELIVERY_DATE).toLocaleDateString("en-IN") : "—"}</p>
+                  <p><span className="text-text-secondary">Delivery:</span> {fmtDate(poData.DELIVERY_DATE)}</p>
                 </div>
               </div>
             )}

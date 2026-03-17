@@ -57,7 +57,7 @@ export default function VendorSelect({
           rows.map((r) => ({
             vendor_id:   r.VENDOR_ID,
             vendor_name: r.COMPANY_NAME,
-            gstin:       r.GSTIN,
+            gstin:       r.GSTIN ?? "",
             vendor_type: r.VENDOR_TYPE,
           }))
         );
@@ -84,7 +84,7 @@ export default function VendorSelect({
       !query ||
       v.vendor_name.toLowerCase().includes(query.toLowerCase()) ||
       v.vendor_id.toLowerCase().includes(query.toLowerCase()) ||
-      v.gstin.toLowerCase().includes(query.toLowerCase())
+      v.gstin?.toLowerCase().includes(query.toLowerCase())
   );
 
   function handleSelect(v: VendorOption) {

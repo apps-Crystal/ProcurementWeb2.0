@@ -1,5 +1,5 @@
 /**
- * GET /api/vendors/[id] — fetch a single vendor by VENDOR_ID
+ * GET /api/vendors/[id] — fetch a single vendor + its sub-profiles
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -11,12 +11,20 @@ export async function GET(
 ) {
   try {
     const { id } = await params;
-    const rows = await readSheet("VENDORS");
-    const vendor = rows.find((r) => r.VENDOR_ID === id);
+
+    const [vendors, allSubProfiles] = await Promise.all([
+      readSheet("VENDORS"),
+      readSheet("VENDOR_SUB_PROFILES"),
+    ]);
+
+    const vendor = vendors.find((r) => r.VENDOR_ID === id);
     if (!vendor) {
       return NextResponse.json({ error: "Vendor not found" }, { status: 404 });
     }
-    return NextResponse.json({ vendor });
+
+    const subProfiles = allSubProfiles.filter((r) => r.VENDOR_ID === id);
+
+    return NextResponse.json({ vendor, subProfiles });
   } catch (err) {
     console.error("[GET /api/vendors/[id]]", err);
     return NextResponse.json(

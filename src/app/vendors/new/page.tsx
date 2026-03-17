@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
+import { useDropdowns, opts } from "@/hooks/useDropdowns";
 import { useRouter } from "next/navigation";
 import {
   Users, UploadCloud, Save, Send, Building2, MapPin,
@@ -10,41 +11,52 @@ import { useCurrentUser } from "@/components/auth/AuthProvider";
 
 type DocKey = "cancelled_cheque" | "gst_cert" | "pan_copy" | "msme_cert";
 
-const DOC_SLOTS: { key: DocKey; label: string; required: boolean; hint: string; accept: string }[] = [
-  { key: "cancelled_cheque", label: "Cancelled Cheque",      required: true,  hint: "PDF / JPG up to 5 MB", accept: ".pdf,.jpg,.jpeg,.png" },
-  { key: "gst_cert",         label: "GST Registration Copy", required: true,  hint: "PDF up to 5 MB",       accept: ".pdf" },
-  { key: "pan_copy",         label: "PAN Card Copy",         required: true,  hint: "PDF / JPG up to 5 MB", accept: ".pdf,.jpg,.jpeg,.png" },
-  { key: "msme_cert",        label: "MSME Certificate",      required: false, hint: "Required if MSME",     accept: ".pdf" },
+const DOC_SLOTS: { key: DocKey; label: string; required: boolean; hint: string }[] = [
+  { key: "pan_copy",         label: "PAN Card Copy",         required: true,  hint: "PDF / JPG up to 5 MB" },
+  { key: "gst_cert",         label: "GST Registration Copy", required: true,  hint: "PDF up to 5 MB — for primary GST number" },
+  { key: "cancelled_cheque", label: "Cancelled Cheque",      required: true,  hint: "PDF / JPG — for primary bank account" },
+  { key: "msme_cert",        label: "MSME Certificate",      required: false, hint: "Required if MSME" },
 ];
 
 export default function VendorRegistration() {
   const router = useRouter();
   const { user } = useCurrentUser();
 
-  const [companyName, setCompanyName]         = useState("");
-  const [tradeName, setTradeName]             = useState("");
-  const [entityType, setEntityType]           = useState("");
-  const [vendorType, setVendorType]           = useState("");
-  const [pan, setPan]                         = useState("");
-  const [gstin, setGstin]                     = useState("");
-  const [isMsme, setIsMsme]                   = useState("Non-MSME");
-  const [udyam, setUdyam]                     = useState("");
-  const [tdsCategory, setTdsCategory]         = useState("Not Applicable");
-  const [address, setAddress]                 = useState("");
-  const [city, setCity]                       = useState("");
-  const [stateVal, setStateVal]               = useState("");
-  const [pinCode, setPinCode]                 = useState("");
-  const [contactPerson, setContactPerson]     = useState("");
-  const [designation, setDesignation]         = useState("");
-  const [email, setEmail]                     = useState("");
-  const [phone, setPhone]                     = useState("");
-  const [beneficiaryName, setBeneficiaryName] = useState("");
-  const [bankName, setBankName]               = useState("");
-  const [branchName, setBranchName]           = useState("");
-  const [accountNumber, setAccountNumber]     = useState("");
-  const [confirmAccount, setConfirmAccount]   = useState("");
-  const [ifscCode, setIfscCode]               = useState("");
-  const [accountType, setAccountType]         = useState("Current");
+  // Company
+  const [companyName, setCompanyName]   = useState("");
+  const [tradeName, setTradeName]       = useState("");
+  const [entityType, setEntityType]     = useState("");
+  const [vendorType, setVendorType]     = useState("");
+  const [pan, setPan]                   = useState("");
+  const [isMsme, setIsMsme]             = useState("Non-MSME");
+  const [udyam, setUdyam]               = useState("");
+  const [tdsCategory, setTdsCategory]   = useState("Not Applicable");
+
+  // Address
+  const [address, setAddress]     = useState("");
+  const [city, setCity]           = useState("");
+  const [stateVal, setStateVal]   = useState("");
+  const [pinCode, setPinCode]     = useState("");
+  const [contactPerson, setContactPerson] = useState("");
+  const [designation, setDesignation]     = useState("");
+  const [email, setEmail]                 = useState("");
+  const [phone, setPhone]                 = useState("");
+
+  // Primary Sub-Profile (Financial)
+  const [subProfileLabel, setSubProfileLabel]     = useState("Primary");
+  const [gstin, setGstin]                         = useState("");
+  const [billingAddressSame, setBillingAddressSame] = useState(true);
+  const [billingAddress, setBillingAddress]         = useState("");
+  const [billingState, setBillingState]             = useState("");
+  const [beneficiaryName, setBeneficiaryName]       = useState("");
+  const [bankName, setBankName]                     = useState("");
+  const [branchName, setBranchName]                 = useState("");
+  const [accountNumber, setAccountNumber]           = useState("");
+  const [confirmAccount, setConfirmAccount]         = useState("");
+  const [ifscCode, setIfscCode]                     = useState("");
+  const [accountType, setAccountType]               = useState("Current");
+
+  // Experience
   const [yearsInBusiness, setYearsInBusiness] = useState("");
   const [keyClients, setKeyClients]           = useState("");
   const [workNotes, setWorkNotes]             = useState("");
@@ -61,16 +73,20 @@ export default function VendorRegistration() {
     cancelled_cheque: chequeRef, gst_cert: gstRef, pan_copy: panRef, msme_cert: msmeRef,
   };
 
+  const dropdowns = useDropdowns("VENDOR_TYPE", "TDS_CATEGORY", "ACCOUNT_TYPE");
+
   const [submitting, setSubmitting] = useState(false);
   const [error, setError]           = useState("");
   const [successId, setSuccessId]   = useState("");
+  const [duplicate, setDuplicate]   = useState<{ vendor_id: string; company_name: string; status: string } | null>(null);
 
   async function handleSubmit() {
     setError("");
+    setDuplicate(null);
     if (!companyName.trim())   { setError("Legal Company Name is required."); return; }
     if (!vendorType)           { setError("Vendor Type is required."); return; }
-    if (!gstin.trim())         { setError("GSTIN is required."); return; }
     if (!pan.trim())           { setError("PAN Number is required."); return; }
+    if (!gstin.trim())         { setError("GSTIN is required."); return; }
     if (!contactPerson.trim()) { setError("Contact Person is required."); return; }
     if (!email.trim())         { setError("Email is required."); return; }
     if (!phone.trim())         { setError("Phone is required."); return; }
@@ -78,9 +94,9 @@ export default function VendorRegistration() {
     if (!accountNumber.trim()) { setError("Account Number is required."); return; }
     if (accountNumber !== confirmAccount) { setError("Account numbers do not match."); return; }
     if (!ifscCode.trim())      { setError("IFSC Code is required."); return; }
-    if (!docs.cancelled_cheque) { setError("Cancelled Cheque is mandatory."); return; }
-    if (!docs.gst_cert)         { setError("GST Registration Copy is mandatory."); return; }
     if (!docs.pan_copy)         { setError("PAN Card Copy is mandatory."); return; }
+    if (!docs.gst_cert)         { setError("GST Registration Copy is mandatory."); return; }
+    if (!docs.cancelled_cheque) { setError("Cancelled Cheque is mandatory."); return; }
     if (isMsme !== "Non-MSME" && !docs.msme_cert) { setError("MSME Certificate required."); return; }
 
     setSubmitting(true);
@@ -88,12 +104,18 @@ export default function VendorRegistration() {
       const lines = keyClients.split("\n").map((s) => s.trim()).filter(Boolean);
       const payload = {
         company_name: companyName, trade_name: tradeName, entity_type: entityType,
-        vendor_type: vendorType, pan: pan.toUpperCase(), gstin: gstin.toUpperCase(),
+        vendor_type: vendorType, pan: pan.toUpperCase(),
         is_msme: isMsme === "Non-MSME" ? "N" : "Y", udyam_reg_number: udyam, tds_category: tdsCategory,
         address, city, state: stateVal, pin_code: pinCode,
         contact_person: contactPerson, designation, email, phone,
+        // Primary sub-profile
+        sub_profile_label: subProfileLabel,
+        gstin: gstin.toUpperCase(),
+        billing_address: billingAddressSame ? "" : billingAddress,
+        billing_state:   billingAddressSame ? "" : billingState,
         beneficiary_name: beneficiaryName, bank_name: bankName, branch_name: branchName,
         account_number: accountNumber, ifsc_code: ifscCode.toUpperCase(), account_type: accountType,
+        // Experience
         years_in_business: yearsInBusiness, key_client_1: lines[0] ?? "", key_client_2: lines[1] ?? "",
         work_experience_notes: workNotes, capacity_scale: capacityScale,
         registered_by: user?.userId ?? "SYSTEM",
@@ -101,13 +123,18 @@ export default function VendorRegistration() {
 
       const fd = new FormData();
       fd.append("data", JSON.stringify(payload));
-      fd.append("cancelled_cheque", docs.cancelled_cheque!);
-      fd.append("gst_cert",         docs.gst_cert!);
       fd.append("pan_copy",         docs.pan_copy!);
+      fd.append("gst_cert",         docs.gst_cert!);
+      fd.append("cancelled_cheque", docs.cancelled_cheque!);
       if (docs.msme_cert) fd.append("msme_cert", docs.msme_cert);
 
       const res  = await fetch("/api/vendors", { method: "POST", body: fd });
       const json = await res.json();
+      if (res.status === 409 && json.duplicate) {
+        setError(json.error);
+        setDuplicate(json.duplicate);
+        return;
+      }
       if (!res.ok) throw new Error(json.error ?? "Submission failed");
       setSuccessId(json.ven_id);
       setTimeout(() => router.push("/vendors"), 3000);
@@ -158,11 +185,22 @@ export default function VendorRegistration() {
           <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" /> {error}
         </div>
       )}
+      {duplicate && (
+        <div className="flex items-center justify-between gap-3 text-sm bg-yellow-50 border border-yellow-300 rounded-sm px-3 py-2">
+          <span className="text-yellow-800">
+            <strong>{duplicate.company_name}</strong> — Status: {duplicate.status}
+          </span>
+          <a href={`/vendors/${duplicate.vendor_id}`} target="_blank" rel="noopener noreferrer"
+            className="shrink-0 text-xs font-medium text-white bg-yellow-600 hover:bg-yellow-700 px-3 py-1 rounded">
+            View Vendor
+          </a>
+        </div>
+      )}
 
-      {/* Hidden file inputs — one per doc slot */}
-      <input ref={chequeRef} type="file" accept=".pdf,.jpg,.jpeg,.png" className="hidden" onChange={(e) => setDocs((p) => ({ ...p, cancelled_cheque: e.target.files?.[0] ?? null }))} />
-      <input ref={gstRef}    type="file" accept=".pdf"                 className="hidden" onChange={(e) => setDocs((p) => ({ ...p, gst_cert:         e.target.files?.[0] ?? null }))} />
+      {/* Hidden file inputs */}
       <input ref={panRef}    type="file" accept=".pdf,.jpg,.jpeg,.png" className="hidden" onChange={(e) => setDocs((p) => ({ ...p, pan_copy:         e.target.files?.[0] ?? null }))} />
+      <input ref={gstRef}    type="file" accept=".pdf"                 className="hidden" onChange={(e) => setDocs((p) => ({ ...p, gst_cert:         e.target.files?.[0] ?? null }))} />
+      <input ref={chequeRef} type="file" accept=".pdf,.jpg,.jpeg,.png" className="hidden" onChange={(e) => setDocs((p) => ({ ...p, cancelled_cheque: e.target.files?.[0] ?? null }))} />
       <input ref={msmeRef}   type="file" accept=".pdf"                 className="hidden" onChange={(e) => setDocs((p) => ({ ...p, msme_cert:        e.target.files?.[0] ?? null }))} />
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -184,7 +222,7 @@ export default function VendorRegistration() {
                 <input type="text" className="enterprise-input" placeholder="If different from legal name" value={tradeName} onChange={(e) => setTradeName(e.target.value)} />
               </div>
               <div>
-                <label className="block text-xs font-bold text-primary-900 mb-1">Entity Type <span className="text-danger">*</span></label>
+                <label className="block text-xs font-bold text-primary-900 mb-1">Entity Type</label>
                 <select className="enterprise-input" value={entityType} onChange={(e) => setEntityType(e.target.value)}>
                   <option value="">Select...</option>
                   <option>Private Limited</option><option>Public Limited</option>
@@ -195,16 +233,16 @@ export default function VendorRegistration() {
                 <label className="block text-xs font-bold text-primary-900 mb-1">Vendor Type <span className="text-danger">*</span></label>
                 <select className="enterprise-input" value={vendorType} onChange={(e) => setVendorType(e.target.value)}>
                   <option value="">Select...</option>
-                  <option>Supplier</option><option>Contractor</option><option>Consultant</option>
+                  {opts(dropdowns, "VENDOR_TYPE", [
+                    { value: "Supplier", label: "Supplier" },
+                    { value: "Contractor", label: "Contractor" },
+                    { value: "Consultant", label: "Consultant" },
+                  ]).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                 </select>
               </div>
               <div>
                 <label className="block text-xs font-bold text-primary-900 mb-1">PAN Number <span className="text-danger">*</span></label>
                 <input type="text" className="enterprise-input font-mono uppercase" placeholder="ABCDE1234F" maxLength={10} value={pan} onChange={(e) => setPan(e.target.value.toUpperCase())} />
-              </div>
-              <div>
-                <label className="block text-xs font-bold text-primary-900 mb-1">GSTIN <span className="text-danger">*</span></label>
-                <input type="text" className="enterprise-input font-mono uppercase" placeholder="22AAAAA0000A1Z5" maxLength={15} value={gstin} onChange={(e) => setGstin(e.target.value.toUpperCase())} />
               </div>
               <div>
                 <label className="block text-xs font-bold text-primary-900 mb-1">MSME Status</label>
@@ -221,8 +259,13 @@ export default function VendorRegistration() {
               <div>
                 <label className="block text-xs font-bold text-primary-900 mb-1">TDS Category <span className="text-danger">*</span></label>
                 <select className="enterprise-input" value={tdsCategory} onChange={(e) => setTdsCategory(e.target.value)}>
-                  <option>Not Applicable</option><option value="194C">194C - Contractor</option>
-                  <option value="194J">194J - Professional</option><option value="194I">194I - Rent</option><option>Other</option>
+                  {opts(dropdowns, "TDS_CATEGORY", [
+                    { value: "Not Applicable", label: "Not Applicable" },
+                    { value: "194C", label: "194C - Contractor" },
+                    { value: "194J", label: "194J - Professional" },
+                    { value: "194I", label: "194I - Rent" },
+                    { value: "Other", label: "Other" },
+                  ]).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                 </select>
               </div>
             </div>
@@ -263,13 +306,40 @@ export default function VendorRegistration() {
             </div>
           </div>
 
-          {/* 3. Banking */}
+          {/* 3. Primary Bank Account & GST */}
           <div className="enterprise-card p-0">
             <div className="p-3 border-b border-border bg-primary-50/50 flex items-center gap-2">
               <Banknote className="w-4 h-4 text-primary-700" />
-              <h2 className="text-sm font-bold text-primary-900 uppercase tracking-wide">3. Financial Information</h2>
+              <h2 className="text-sm font-bold text-primary-900 uppercase tracking-wide">3. Primary Bank Account & GST</h2>
+              <span className="ml-auto text-[10px] text-text-secondary border border-border px-2 py-0.5 rounded-sm">
+                Additional accounts can be added later from vendor details
+              </span>
             </div>
             <div className="p-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-bold text-primary-900 mb-1">Sub-Profile Label <span className="text-danger">*</span></label>
+                <input type="text" className="enterprise-input" placeholder='e.g. "Primary", "HO - Maharashtra"' value={subProfileLabel} onChange={(e) => setSubProfileLabel(e.target.value)} />
+                <p className="text-[10px] text-text-secondary mt-1">A name to identify this bank account / GST registration.</p>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-primary-900 mb-1">GSTIN <span className="text-danger">*</span></label>
+                <input type="text" className="enterprise-input font-mono uppercase" placeholder="22AAAAA0000A1Z5" maxLength={15} value={gstin} onChange={(e) => setGstin(e.target.value.toUpperCase())} />
+              </div>
+
+              {/* Billing address — toggle */}
+              <div className="sm:col-span-2">
+                <label className="flex items-center gap-2 cursor-pointer mb-2">
+                  <input type="checkbox" checked={billingAddressSame} onChange={(e) => setBillingAddressSame(e.target.checked)} className="rounded" />
+                  <span className="text-xs font-bold text-primary-900">Billing address same as registered address</span>
+                </label>
+                {!billingAddressSame && (
+                  <div className="grid grid-cols-2 gap-2">
+                    <input type="text" className="enterprise-input sm:col-span-2" placeholder="Billing Street Address" value={billingAddress} onChange={(e) => setBillingAddress(e.target.value)} />
+                    <input type="text" className="enterprise-input" placeholder="Billing State" value={billingState} onChange={(e) => setBillingState(e.target.value)} />
+                  </div>
+                )}
+              </div>
+
               <div className="sm:col-span-2">
                 <label className="block text-xs font-bold text-primary-900 mb-1">Beneficiary Account Name <span className="text-danger">*</span></label>
                 <input type="text" className="enterprise-input" placeholder="Must match Legal Name exactly" value={beneficiaryName} onChange={(e) => setBeneficiaryName(e.target.value)} />
@@ -299,7 +369,10 @@ export default function VendorRegistration() {
               <div>
                 <label className="block text-xs font-bold text-primary-900 mb-1">Account Type</label>
                 <select className="enterprise-input" value={accountType} onChange={(e) => setAccountType(e.target.value)}>
-                  <option>Current</option><option>Savings</option>
+                  {opts(dropdowns, "ACCOUNT_TYPE", [
+                    { value: "Current", label: "Current" },
+                    { value: "Savings", label: "Savings" },
+                  ]).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                 </select>
               </div>
             </div>
@@ -371,6 +444,7 @@ export default function VendorRegistration() {
                         : <><UploadCloud className="w-3.5 h-3.5" /> {slot.hint}</>
                       }
                     </button>
+                    <p className="text-[10px] text-text-secondary mt-1">{slot.hint}</p>
                   </div>
                 );
               })}

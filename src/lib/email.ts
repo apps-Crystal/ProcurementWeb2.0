@@ -34,9 +34,11 @@ const APP_BASE_URL      = process.env.NEXT_PUBLIC_APP_URL ?? "https://procuremen
 
 function fmt(date: string) {
   if (!date) return "—";
-  return new Date(date).toLocaleDateString("en-IN", {
-    day: "2-digit", month: "short", year: "numeric",
-  });
+  const d = new Date(date);
+  if (isNaN(d.getTime())) return date;
+  const day   = String(d.getDate()).padStart(2, "0");
+  const month = d.toLocaleString("en-IN", { month: "short" });
+  return `${day} - ${month} - ${d.getFullYear()}`;
 }
 
 function fmtAmount(val: string | number) {

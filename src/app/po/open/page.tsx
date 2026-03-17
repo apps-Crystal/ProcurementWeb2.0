@@ -12,6 +12,7 @@ import {
   Loader2,
 } from "lucide-react";
 import Link from "next/link";
+import { fmtDate } from "@/lib/utils";
 
 type POStatus = "Yet to Dispatch" | "In Transit" | "Partially Received";
 
@@ -55,14 +56,12 @@ export default function OpenPOList() {
           .filter((r) => ["ISSUED", "ACKNOWLEDGED", "ACCEPTED"].includes(r.STATUS))
           .map((r) => ({
             id: r.PO_ID,
-            issueDate: r.PO_DATE ? new Date(r.PO_DATE).toLocaleDateString("en-IN") : "—",
+            issueDate: fmtDate(r.PO_DATE),
             vendor: r.VENDOR_NAME || "—",
             value: r.PO_TOTAL
               ? `₹${parseFloat(r.PO_TOTAL).toLocaleString("en-IN")}`
               : "—",
-            deadline: r.DELIVERY_DATE
-              ? new Date(r.DELIVERY_DATE).toLocaleDateString("en-IN")
-              : "—",
+            deadline: fmtDate(r.DELIVERY_DATE),
             daysRemaining: computeDays(r.DELIVERY_DATE),
             status: mapStatus(r.STATUS),
           }));

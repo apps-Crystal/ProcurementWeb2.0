@@ -12,6 +12,7 @@ import {
   Clock,
   ChevronRight,
 } from "lucide-react";
+import { fmtDate } from "@/lib/utils";
 
 type Vendor = Record<string, string>;
 
@@ -202,9 +203,7 @@ export default function VendorListPage() {
                       <RefBadge value={v.REFERENCE_VERIFIED} />
                     </td>
                     <td className="px-4 py-3 text-xs text-text-secondary whitespace-nowrap">
-                      {v.REGISTERED_DATE
-                        ? new Date(v.REGISTERED_DATE).toLocaleDateString()
-                        : "—"}
+                      {fmtDate(v.REGISTERED_DATE)}
                     </td>
                     <td className="px-4 py-3 whitespace-nowrap">
                       <Link

@@ -12,6 +12,7 @@ import {
   MessageSquare,
   Loader2,
 } from "lucide-react";
+import { fmtDate } from "@/lib/utils";
 
 type FlagSeverity = "High" | "Medium" | "Low";
 type FlagStatus = "OPEN" | "IN_REVIEW" | "RESOLVED";
@@ -56,7 +57,7 @@ export default function FlagsAndDisputes() {
         setFlags(
           rows.map((r) => ({
             id: r.FLAG_ID,
-            date: r.DATE ? new Date(r.DATE).toLocaleDateString("en-IN") : "—",
+            date: fmtDate(r.DATE),
             type: r.TYPE,
             docRef: r.DOC_REF || "—",
             vendorName: r.VENDOR_NAME || "—",

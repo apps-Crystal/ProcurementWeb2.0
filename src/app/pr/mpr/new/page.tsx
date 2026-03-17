@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import { useDropdowns, opts } from "@/hooks/useDropdowns";
 import { useRouter } from "next/navigation";
 import { useCurrentUser } from "@/components/auth/AuthProvider";
 import VendorSelect from "@/components/ui/VendorSelect";
@@ -47,26 +48,12 @@ export default function NewMPR() {
   const [vendorId, setVendorId]             = useState("");
   const [vendorName, setVendorName]         = useState("");
   const [deliveryLocation, setDeliveryLocation] = useState("");
-  const [siteOptions, setSiteOptions] = useState<{ value: string; label: string }[]>([]);
+  const dropdowns = useDropdowns("SITE", "UOM", "MPR_CATEGORY", "PROCUREMENT_TYPE", "PAYMENT_TERMS", "GST_PERCENT");
 
   useEffect(() => {
-    console.log("[NewMPR] Fetching sites...");
-    fetch("/api/dropdowns?list=SITE")
-      .then((r) => {
-        console.log("[NewMPR] API Status:", r.status);
-        return r.json();
-      })
-      .then((d) => {
-        console.log("[NewMPR] API Data:", d);
-        if (d.options?.length) {
-          setSiteOptions(d.options);
-          setDeliveryLocation((prev) => prev || d.options[0].value);
-        }
-      })
-      .catch((err) => {
-        console.error("[NewMPR] Dropdown fetch error:", err);
-      });
-  }, []);
+    const siteOpts = dropdowns["SITE"];
+    if (siteOpts?.length) setDeliveryLocation((prev) => prev || siteOpts[0].value);
+  }, [dropdowns]);
   const [deliveryDate, setDeliveryDate]     = useState("");
   const [paymentType, setPaymentType]       = useState("Standard");
   const [advancePercent, setAdvancePercent] = useState(0);
@@ -317,20 +304,24 @@ export default function NewMPR() {
                 <label className="block text-xs font-medium text-text-secondary mb-1">Category <span className="text-danger">*</span></label>
                 <select className="enterprise-input" value={category} onChange={(e) => setCategory(e.target.value)}>
                   <option value="">Select Category</option>
-                  <option value="Raw Material">Raw Material</option>
-                  <option value="Consumable">Consumable</option>
-                  <option value="Equipment">Equipment</option>
-                  <option value="IT">IT / Software</option>
-                  <option value="Other">Other</option>
+                  {opts(dropdowns, "MPR_CATEGORY", [
+                    { value: "Raw Material", label: "Raw Material" },
+                    { value: "Consumable", label: "Consumable" },
+                    { value: "Equipment", label: "Equipment" },
+                    { value: "IT", label: "IT / Software" },
+                    { value: "Other", label: "Other" },
+                  ]).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                 </select>
               </div>
 
               <div>
                 <label className="block text-xs font-medium text-text-secondary mb-1">Procurement Type <span className="text-danger">*</span></label>
                 <select className="enterprise-input" value={procurementType} onChange={(e) => setProcurementType(e.target.value)}>
-                  <option value="Standard">Standard</option>
-                  <option value="Emergency">Emergency</option>
-                  <option value="Repeat">Repeat</option>
+                  {opts(dropdowns, "PROCUREMENT_TYPE", [
+                    { value: "Standard", label: "Standard" },
+                    { value: "Emergency", label: "Emergency" },
+                    { value: "Repeat", label: "Repeat" },
+                  ]).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                 </select>
               </div>
 
@@ -353,8 +344,8 @@ export default function NewMPR() {
               <div>
                 <label className="block text-xs font-medium text-text-secondary mb-1">Delivery Location</label>
                 <select className="enterprise-input" value={deliveryLocation} onChange={(e) => setDeliveryLocation(e.target.value)}>
-                  {siteOptions.length === 0 && <option value="">Loading sites...</option>}
-                  {siteOptions.map((s) => (
+                  {!dropdowns["SITE"]?.length && <option value="">Loading sites...</option>}
+                  {opts(dropdowns, "SITE", []).map((s) => (
                     <option key={s.value} value={s.value}>{s.label}</option>
                   ))}
                 </select>
@@ -375,9 +366,11 @@ export default function NewMPR() {
               <div>
                 <label className="block text-xs font-medium text-text-secondary mb-1">Payment Term Type <span className="text-danger">*</span></label>
                 <select className="enterprise-input" value={paymentType} onChange={(e) => setPaymentType(e.target.value)}>
-                  <option value="Standard">Standard (30 days from invoice verif.)</option>
-                  <option value="Advance">Advance</option>
-                  <option value="Milestone-linked">Milestone-linked</option>
+                  {opts(dropdowns, "PAYMENT_TERMS", [
+                    { value: "Standard", label: "Standard (30 days from invoice verif.)" },
+                    { value: "Advance", label: "Advance" },
+                    { value: "Milestone-linked", label: "Milestone-linked" },
+                  ]).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                 </select>
               </div>
               {paymentType === "Advance" && (
@@ -497,7 +490,11 @@ export default function NewMPR() {
                         </td>
                         <td className="px-3 py-2">
                           <select className="w-full bg-surface border border-border focus:ring-1 focus:ring-primary-500 rounded-sm px-1 py-1 text-xs" value={line.uom} onChange={(e) => updateLine(line.id, "uom", e.target.value)}>
-                            <option>Nos</option><option>Kg</option><option>Ltr</option><option>Box</option><option>Mtr</option><option>Set</option>
+                            {opts(dropdowns, "UOM", [
+                              { value: "Nos", label: "Nos" }, { value: "Kg", label: "Kg" },
+                              { value: "Ltr", label: "Ltr" }, { value: "Box", label: "Box" },
+                              { value: "Mtr", label: "Mtr" }, { value: "Set", label: "Set" },
+                            ]).map((u) => <option key={u.value} value={u.value}>{u.label}</option>)}
                           </select>
                         </td>
                         <td className="px-3 py-2">
@@ -523,7 +520,10 @@ export default function NewMPR() {
                             <input readOnly className="w-full bg-primary-50/80 border-transparent text-primary-700 font-semibold pointer-events-none rounded-sm px-1 py-1 text-xs text-center" value={`${line.gst_percent}%`} />
                           ) : (
                             <select className="w-full bg-surface border border-border focus:ring-1 focus:ring-primary-500 rounded-sm px-1 py-1 text-xs" value={line.gst_percent} onChange={(e) => updateLine(line.id, "gst_percent", parseFloat(e.target.value))}>
-                              <option value={0}>0</option><option value={5}>5</option><option value={12}>12</option><option value={18}>18</option><option value={28}>28</option>
+                              {opts(dropdowns, "GST_PERCENT", [
+                                { value: "0", label: "0" }, { value: "5", label: "5" },
+                                { value: "12", label: "12" }, { value: "18", label: "18" }, { value: "28", label: "28" },
+                              ]).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                             </select>
                           )}
                         </td>
