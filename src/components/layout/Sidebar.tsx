@@ -118,7 +118,10 @@ export function Sidebar() {
       <div className={`flex h-14 items-center border-b border-primary-800 bg-primary-900 shadow-sm ${isCollapsed ? 'justify-center' : 'justify-between px-4'}`}>
         {!isCollapsed && (
           <div className="flex items-center gap-2 font-bold text-lg tracking-tight overflow-hidden whitespace-nowrap">
-            <div className="w-6 h-6 rounded bg-accent-500 flex items-center justify-center text-primary-900 text-xs flex-shrink-0">C</div>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <div className="w-7 h-7 rounded flex-shrink-0 flex items-center justify-center" style={{ background: "#1a3a6b" }}>
+              <img src="/logo.png" alt="Crystal Procure" width={22} height={22} style={{ objectFit: "contain" }} />
+            </div>
             <span className="truncate">Crystal Procure</span>
           </div>
         )}

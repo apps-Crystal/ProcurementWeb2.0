@@ -80,13 +80,40 @@ export default function VendorRegistration() {
   const [successId, setSuccessId]   = useState("");
   const [duplicate, setDuplicate]   = useState<{ vendor_id: string; company_name: string; status: string } | null>(null);
 
+  // Validation regex constants
+  const PAN_REGEX    = /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/;
+  const GSTIN_REGEX  = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/;
+  const UDYAM_REGEX  = /^UDYAM-[A-Z]{2}-[0-9]{2}-[0-9]{7}$/;
+  const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5 MB
+
+  function handleDocChange(key: DocKey, file: File | null) {
+    if (file && file.size > MAX_FILE_SIZE) {
+      setError(`${file.name}: File size exceeds 5 MB limit. Please upload a smaller file.`);
+      return;
+    }
+    setDocs((p) => ({ ...p, [key]: file }));
+  }
+
   async function handleSubmit() {
     setError("");
     setDuplicate(null);
     if (!companyName.trim())   { setError("Legal Company Name is required."); return; }
     if (!vendorType)           { setError("Vendor Type is required."); return; }
+
+    // BUG-017: PAN format validation
     if (!pan.trim())           { setError("PAN Number is required."); return; }
+    if (!PAN_REGEX.test(pan))  { setError("Invalid PAN format. Must be 5 letters, 4 digits, 1 letter (e.g. ABCDE1234F)."); return; }
+
+    // BUG-018: Udyam mandatory for MSME + format validation
+    if (isMsme !== "Non-MSME") {
+      if (!udyam.trim()) { setError("Udyam Registration Number is mandatory for MSME vendors."); return; }
+      if (!UDYAM_REGEX.test(udyam)) { setError("Invalid Udyam format. Expected: UDYAM-XX-00-0000000 (e.g. UDYAM-MH-12-0001234)."); return; }
+    }
+
+    // BUG-013: GSTIN format validation
     if (!gstin.trim())         { setError("GSTIN is required."); return; }
+    if (!GSTIN_REGEX.test(gstin)) { setError("Invalid GSTIN format. Expected 15-character GST Identification Number (e.g. 22AAAAA0000A1Z5)."); return; }
+
     if (!contactPerson.trim()) { setError("Contact Person is required."); return; }
     if (!email.trim())         { setError("Email is required."); return; }
     if (!phone.trim())         { setError("Phone is required."); return; }
@@ -94,6 +121,11 @@ export default function VendorRegistration() {
     if (!accountNumber.trim()) { setError("Account Number is required."); return; }
     if (accountNumber !== confirmAccount) { setError("Account numbers do not match."); return; }
     if (!ifscCode.trim())      { setError("IFSC Code is required."); return; }
+
+    // BUG-015: Minimum 2 key client references
+    const clientLines = keyClients.split("\n").map((s) => s.trim()).filter(Boolean);
+    if (clientLines.length < 2) { setError("At least 2 key client references are required (SOP §11). Please enter one client per line."); return; }
+
     if (!docs.pan_copy)         { setError("PAN Card Copy is mandatory."); return; }
     if (!docs.gst_cert)         { setError("GST Registration Copy is mandatory."); return; }
     if (!docs.cancelled_cheque) { setError("Cancelled Cheque is mandatory."); return; }
@@ -101,7 +133,6 @@ export default function VendorRegistration() {
 
     setSubmitting(true);
     try {
-      const lines = keyClients.split("\n").map((s) => s.trim()).filter(Boolean);
       const payload = {
         company_name: companyName, trade_name: tradeName, entity_type: entityType,
         vendor_type: vendorType, pan: pan.toUpperCase(),
@@ -116,7 +147,7 @@ export default function VendorRegistration() {
         beneficiary_name: beneficiaryName, bank_name: bankName, branch_name: branchName,
         account_number: accountNumber, ifsc_code: ifscCode.toUpperCase(), account_type: accountType,
         // Experience
-        years_in_business: yearsInBusiness, key_client_1: lines[0] ?? "", key_client_2: lines[1] ?? "",
+        years_in_business: yearsInBusiness, key_client_1: clientLines[0] ?? "", key_client_2: clientLines[1] ?? "",
         work_experience_notes: workNotes, capacity_scale: capacityScale,
         registered_by: user?.userId ?? "SYSTEM",
       };
@@ -198,10 +229,10 @@ export default function VendorRegistration() {
       )}
 
       {/* Hidden file inputs */}
-      <input ref={panRef}    type="file" accept=".pdf,.jpg,.jpeg,.png" className="hidden" onChange={(e) => setDocs((p) => ({ ...p, pan_copy:         e.target.files?.[0] ?? null }))} />
-      <input ref={gstRef}    type="file" accept=".pdf"                 className="hidden" onChange={(e) => setDocs((p) => ({ ...p, gst_cert:         e.target.files?.[0] ?? null }))} />
-      <input ref={chequeRef} type="file" accept=".pdf,.jpg,.jpeg,.png" className="hidden" onChange={(e) => setDocs((p) => ({ ...p, cancelled_cheque: e.target.files?.[0] ?? null }))} />
-      <input ref={msmeRef}   type="file" accept=".pdf"                 className="hidden" onChange={(e) => setDocs((p) => ({ ...p, msme_cert:        e.target.files?.[0] ?? null }))} />
+      <input ref={panRef}    type="file" accept=".pdf,.jpg,.jpeg,.png" className="hidden" onChange={(e) => handleDocChange("pan_copy",         e.target.files?.[0] ?? null)} />
+      <input ref={gstRef}    type="file" accept=".pdf"                 className="hidden" onChange={(e) => handleDocChange("gst_cert",         e.target.files?.[0] ?? null)} />
+      <input ref={chequeRef} type="file" accept=".pdf,.jpg,.jpeg,.png" className="hidden" onChange={(e) => handleDocChange("cancelled_cheque", e.target.files?.[0] ?? null)} />
+      <input ref={msmeRef}   type="file" accept=".pdf"                 className="hidden" onChange={(e) => handleDocChange("msme_cert",        e.target.files?.[0] ?? null)} />
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-6">
@@ -242,7 +273,10 @@ export default function VendorRegistration() {
               </div>
               <div>
                 <label className="block text-xs font-bold text-primary-900 mb-1">PAN Number <span className="text-danger">*</span></label>
-                <input type="text" className="enterprise-input font-mono uppercase" placeholder="ABCDE1234F" maxLength={10} value={pan} onChange={(e) => setPan(e.target.value.toUpperCase())} />
+                <input type="text" className={`enterprise-input font-mono uppercase ${pan && !/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(pan) ? "border-danger" : ""}`} placeholder="ABCDE1234F" maxLength={10} value={pan} onChange={(e) => setPan(e.target.value.toUpperCase())} />
+                {pan && !/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(pan) && (
+                  <p className="text-[11px] text-danger mt-1">Format: 5 letters + 4 digits + 1 letter (e.g. ABCDE1234F)</p>
+                )}
               </div>
               <div>
                 <label className="block text-xs font-bold text-primary-900 mb-1">MSME Status</label>
@@ -252,8 +286,14 @@ export default function VendorRegistration() {
               </div>
               {isMsme !== "Non-MSME" && (
                 <div>
-                  <label className="block text-xs font-bold text-primary-900 mb-1">Udyam Registration No.</label>
-                  <input type="text" className="enterprise-input font-mono uppercase" placeholder="UDYAM-XX-00-0000000" value={udyam} onChange={(e) => setUdyam(e.target.value.toUpperCase())} />
+                  <label className="block text-xs font-bold text-primary-900 mb-1">
+                    Udyam Registration No. <span className="text-danger">*</span>
+                  </label>
+                  <input type="text" className={`enterprise-input font-mono uppercase ${udyam && !/^UDYAM-[A-Z]{2}-[0-9]{2}-[0-9]{7}$/.test(udyam) ? "border-danger" : ""}`} placeholder="UDYAM-MH-12-0001234" value={udyam} onChange={(e) => setUdyam(e.target.value.toUpperCase())} />
+                  {udyam && !/^UDYAM-[A-Z]{2}-[0-9]{2}-[0-9]{7}$/.test(udyam) && (
+                    <p className="text-[11px] text-danger mt-1">Format: UDYAM-XX-00-0000000 (e.g. UDYAM-MH-12-0001234)</p>
+                  )}
+                  {!udyam && <p className="text-[11px] text-warning mt-1">Required for MSME vendors</p>}
                 </div>
               )}
               <div>
@@ -323,7 +363,16 @@ export default function VendorRegistration() {
               </div>
               <div>
                 <label className="block text-xs font-bold text-primary-900 mb-1">GSTIN <span className="text-danger">*</span></label>
-                <input type="text" className="enterprise-input font-mono uppercase" placeholder="22AAAAA0000A1Z5" maxLength={15} value={gstin} onChange={(e) => setGstin(e.target.value.toUpperCase())} />
+                <input type="text" className={`enterprise-input font-mono uppercase ${gstin && !/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/.test(gstin) ? "border-danger" : gstin.length === 15 ? "border-success" : ""}`} placeholder="22AAAAA0000A1Z5" maxLength={15} value={gstin} onChange={(e) => setGstin(e.target.value.toUpperCase())} />
+                {gstin.length === 15 && /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/.test(gstin) && (
+                  <p className="text-[11px] text-success mt-1 flex items-center gap-1">✓ Valid GSTIN format</p>
+                )}
+                {gstin && gstin.length > 0 && !/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/.test(gstin) && gstin.length === 15 && (
+                  <p className="text-[11px] text-danger mt-1">Invalid GSTIN format (e.g. 22AAAAA0000A1Z5)</p>
+                )}
+                {gstin && gstin.length < 15 && (
+                  <p className="text-[11px] text-text-secondary mt-1">{15 - gstin.length} characters remaining</p>
+                )}
               </div>
 
               {/* Billing address — toggle */}

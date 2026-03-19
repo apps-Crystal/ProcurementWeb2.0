@@ -203,12 +203,23 @@ export default function OpenPOList() {
                       </span>
                     </td>
                     <td className="px-6 py-4 text-right">
-                      <Link
-                        href={`/receipts/grn/new?po=${po.id}`}
-                        className="inline-flex items-center text-xs font-bold text-white bg-success hover:bg-success/90 px-3 py-1.5 rounded-sm shadow-sm transition-all"
-                      >
-                        <PackageCheck className="w-3.5 h-3.5 mr-1" /> Create GRN
-                      </Link>
+                      <div className="flex items-center justify-end gap-2">
+                        <a
+                          href={`/po/${po.id}/print`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center text-xs font-bold text-primary-700 bg-primary-50 hover:bg-primary-100 border border-primary-200 px-2.5 py-1.5 rounded-sm transition-all"
+                          title="View / Download PO as PDF"
+                        >
+                          ⬇ PDF
+                        </a>
+                        <Link
+                          href={`/receipts/grn/new?po=${po.id}`}
+                          className="inline-flex items-center text-xs font-bold text-white bg-success hover:bg-success/90 px-3 py-1.5 rounded-sm shadow-sm transition-all"
+                        >
+                          <PackageCheck className="w-3.5 h-3.5 mr-1" /> Create GRN
+                        </Link>
+                      </div>
                     </td>
                   </tr>
                 ))}

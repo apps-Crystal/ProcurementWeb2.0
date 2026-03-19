@@ -13,9 +13,13 @@
 import { SignJWT, jwtVerify, type JWTPayload } from "jose";
 import crypto from "crypto";
 
-const JWT_SECRET = new TextEncoder().encode(
-  process.env.JWT_SECRET ?? "change-me-in-production"
-);
+if (!process.env.JWT_SECRET) {
+  throw new Error(
+    "[auth] JWT_SECRET environment variable is not set. " +
+    "Set a strong random secret in .env.local before starting the server."
+  );
+}
+const JWT_SECRET = new TextEncoder().encode(process.env.JWT_SECRET);
 const COOKIE_NAME = "procurement_session";
 const TOKEN_EXPIRY  = "8h";
 const RESET_TTL_MS  = 60 * 60 * 1000; // 1 hour

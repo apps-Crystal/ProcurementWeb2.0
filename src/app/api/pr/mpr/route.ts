@@ -79,6 +79,15 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // BUG-019: 5 MB file size limit
+    const MAX_FILE_SIZE = 5 * 1024 * 1024;
+    if (quotationFile && quotationFile.size > MAX_FILE_SIZE)
+      return NextResponse.json({ error: `Vendor Quotation exceeds 5 MB limit (${(quotationFile.size / 1024 / 1024).toFixed(1)} MB).` }, { status: 400 });
+    if (proformaFile && proformaFile.size > MAX_FILE_SIZE)
+      return NextResponse.json({ error: `Proforma Invoice exceeds 5 MB limit (${(proformaFile.size / 1024 / 1024).toFixed(1)} MB).` }, { status: 400 });
+    if (supportingFile && supportingFile.size > MAX_FILE_SIZE)
+      return NextResponse.json({ error: `Supporting document exceeds 5 MB limit (${(supportingFile.size / 1024 / 1024).toFixed(1)} MB).` }, { status: 400 });
+
     // Generate PR ID first — needed for Drive folder name
     const seq = await getNextSeq("MPR");
     const prId = generateId("PR", seq);
@@ -89,16 +98,17 @@ export async function POST(req: NextRequest) {
     let proformaUrl = "";
     let supportingUrl = "";
 
+    // Drive upload is best-effort — if unreachable (offline env), PR still proceeds.
     if (quotationFile) {
-      const up = await uploadFileToDrive(quotationFile, "PR", prId, "quotation.pdf");
+      const up = await uploadFileToDrive(quotationFile, "PR", prId, "quotation.pdf").catch((e) => { console.warn("[drive] quotation upload failed:", e.message); return { web_view_link: "" }; });
       quotationUrl = up.web_view_link;
     }
     if (proformaFile) {
-      const up = await uploadFileToDrive(proformaFile, "PR", prId, "proforma_invoice.pdf");
+      const up = await uploadFileToDrive(proformaFile, "PR", prId, "proforma_invoice.pdf").catch((e) => { console.warn("[drive] proforma upload failed:", e.message); return { web_view_link: "" }; });
       proformaUrl = up.web_view_link;
     }
     if (supportingFile) {
-      const sup = await uploadFileToDrive(supportingFile, "PR", prId, "supporting_doc.pdf");
+      const sup = await uploadFileToDrive(supportingFile, "PR", prId, "supporting_doc.pdf").catch((e) => { console.warn("[drive] supporting upload failed:", e.message); return { web_view_link: "" }; });
       supportingUrl = sup.web_view_link;
     }
 
@@ -133,6 +143,8 @@ export async function POST(req: NextRequest) {
       ADVANCE_PERCENT:          advance_percent,
       CREDIT_PERIOD_DAYS:       credit_period_days,
       RETENTION_AMOUNT:         retention_amount,
+      PAYMENT_SCHEDULE_TYPE:    "",
+      AMC_BILLING_FREQUENCY:    "",
       PAYMENT_LINKED_TO_MILESTONE: "",
       LATE_DELIVERY_LD_PCT:     "",
       LATE_DELIVERY_LD_MAX_PCT: "",

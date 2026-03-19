@@ -8,8 +8,9 @@ import { AuthProvider } from "@/components/auth/AuthProvider";
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const isAuth = pathname.startsWith("/auth");
+  const isPrint = pathname.endsWith("/print");
 
-  if (isAuth) {
+  if (isAuth || isPrint) {
     return <>{children}</>;
   }
 

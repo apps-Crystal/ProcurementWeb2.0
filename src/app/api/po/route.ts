@@ -33,6 +33,13 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
+    // ── Resolve caller from JWT headers ──────────────────────────────────────
+    const callerId   = req.headers.get("x-user-id")   ?? "";
+    const callerRole = req.headers.get("x-user-role") ?? "";
+    if (!callerId) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
     const body = await req.json();
 
     const {
@@ -48,12 +55,22 @@ export async function POST(req: NextRequest) {
       advance_percent = 0,
       tally_po_number = "",
       special_commercial_terms = "",
-      created_by,
     } = body;
+
+    // Use verified caller identity — ignore any created_by from body
+    const created_by = callerId;
 
     if (!pr_id || !vendor_id || !delivery_date) {
       return NextResponse.json(
         { error: "pr_id, vendor_id, and delivery_date are required" },
+        { status: 400 }
+      );
+    }
+
+    // BUG-008: Tally PO Number is mandatory
+    if (!tally_po_number || String(tally_po_number).trim() === "") {
+      return NextResponse.json(
+        { error: "tally_po_number is required before issuing a PO." },
         { status: 400 }
       );
     }
@@ -70,6 +87,22 @@ export async function POST(req: NextRequest) {
     if (pr.STATUS !== "APPROVED") {
       return NextResponse.json(
         { error: "PR must be APPROVED before a PO can be created" },
+        { status: 400 }
+      );
+    }
+
+    // BUG-012: Vendor must be ACTIVE
+    const vendorRows = await readSheet("VENDORS");
+    const vendorRow  = vendorRows.find((v) => v.VENDOR_ID === vendor_id);
+    if (!vendorRow) {
+      return NextResponse.json(
+        { error: `Vendor '${vendor_id}' not found.` },
+        { status: 404 }
+      );
+    }
+    if (vendorRow.STATUS !== "ACTIVE") {
+      return NextResponse.json(
+        { error: `Cannot create PO: vendor '${vendor_name}' has status '${vendorRow.STATUS}'. Only ACTIVE vendors may receive purchase orders.` },
         { status: 400 }
       );
     }
@@ -115,6 +148,8 @@ export async function POST(req: NextRequest) {
       ADVANCE_PAYMENT_PCT:         advancePct,
       ADVANCE_AMOUNT:              advanceAmount,
       PAYMENT_SCHEDULE:            "",
+      PAYMENT_SCHEDULE_TYPE:       "",
+      PAYMENT_SCHEDULE_TOTAL_PCT:  "",
       SUBTOTAL:                    subtotal,
       TOTAL_GST:                   totalGst,
       FREIGHT_GST:                 0,
@@ -123,7 +158,7 @@ export async function POST(req: NextRequest) {
       TC_CUSTOMISED:               hasCustomTerms ? "Y" : "N",
       TC_CUSTOMISATION_NOTES:      special_commercial_terms,
       TC_APPROVED_BY:              "",
-      PO_PDF_URL:                  "",
+      PO_PDF_URL:                  `/po/${poId}/print`,
       CUSTOM_TC_DOC_URL:           "",
       ACK_STATUS:                  "PENDING",
       ACK_TIMESTAMP:               "",
@@ -158,16 +193,23 @@ export async function POST(req: NextRequest) {
     for (const [i, line] of myLines.entries()) {
       const lineSeq = await getNextSeq("PO_LINES");
       await appendRowByFields("PO_LINES", {
-        LINE_ID:          generateId("POL", lineSeq),
-        PO_ID:            poId,
-        LINE_NUMBER:      i + 1,
-        ITEM_DESCRIPTION: line.ITEM_NAME ?? line.ITEM_DESCRIPTION ?? line.SERVICE_DESCRIPTION ?? "",
-        UOM:              line.UNIT_OF_MEASURE ?? line.UOM ?? "",
-        QTY:              line.QUANTITY ?? line.QTY ?? 0,
-        RATE:             line.RATE ?? 0,
-        GST_PERCENT:      line.GST_PERCENT ?? 0,
-        HSN_CODE:         line.HSN_CODE ?? line.SAC_CODE ?? "",
-        LINE_AMOUNT:      line.LINE_TOTAL ?? line.LINE_AMOUNT_BEFORE_GST ?? line.LINE_AMOUNT ?? 0,
+        PO_LINE_ID:             generateId("POL", lineSeq),
+        PO_ID:                  poId,
+        LINE_NUMBER:            i + 1,
+        MPR_LINE_ID:            line.MPR_LINE_ID ?? line.SPR_LINE_ID ?? "",
+        ITEM_NAME:              line.ITEM_NAME ?? line.SERVICE_DESCRIPTION ?? "",
+        ITEM_DESCRIPTION:       line.ITEM_DESCRIPTION ?? line.SERVICE_DESCRIPTION ?? "",
+        UNIT_OF_MEASURE:        line.UNIT_OF_MEASURE ?? line.UOM ?? "",
+        ORDERED_QTY:            line.QUANTITY ?? line.QTY ?? line.ORDERED_QTY ?? 0,
+        RATE:                   line.RATE ?? 0,
+        GST_PERCENT:            line.GST_PERCENT ?? 0,
+        HSN_SAC_CODE:           line.HSN_SAC_CODE ?? line.HSN_CODE ?? line.SAC_CODE ?? "",
+        LINE_AMOUNT_BEFORE_GST: line.LINE_AMOUNT_BEFORE_GST ?? line.LINE_AMOUNT ?? 0,
+        GST_AMOUNT:             line.GST_AMOUNT ?? 0,
+        LINE_TOTAL:             line.LINE_TOTAL ?? 0,
+        QTY_RECEIVED:           0,
+        QTY_OUTSTANDING:        line.QUANTITY ?? line.QTY ?? line.ORDERED_QTY ?? 0,
+        REMARKS:                line.REMARKS ?? "",
       });
     }
 
@@ -178,12 +220,10 @@ export async function POST(req: NextRequest) {
       LAST_UPDATED_DATE: now,
     });
 
-    await writeAuditLog({ userId: created_by, module: "PO", recordId: poId, action: "PO_CREATED", remarks: `From ${pr_type}: ${pr_id}` });
+    await writeAuditLog({ userId: created_by, userRole: callerRole, module: "PO", recordId: poId, action: "PO_CREATED", remarks: `From ${pr_type}: ${pr_id}` });
 
     // ── Email 1: PO Dispatch to Vendor ────────────────────────────────────────
     if (vendor_email) {
-      const vendorRows = await readSheet("VENDORS");
-      const vendorRow  = vendorRows.find((v) => v.VENDOR_ID === vendor_id);
       const contactName = vendorRow?.CONTACT_PERSON ?? vendor_name;
 
       // Fire-and-forget — don't block the response on email delivery

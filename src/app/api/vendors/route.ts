@@ -79,6 +79,34 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // BUG-017: PAN format validation
+    if (!/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(pan.toUpperCase())) {
+      return NextResponse.json({ error: "Invalid PAN format. Expected: 5 letters + 4 digits + 1 letter (e.g. ABCDE1234F)." }, { status: 400 });
+    }
+
+    // BUG-013: GSTIN format validation
+    if (!/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/.test(gstin.toUpperCase())) {
+      return NextResponse.json({ error: "Invalid GSTIN format. Expected 15-character GST Identification Number (e.g. 22AAAAA0000A1Z5)." }, { status: 400 });
+    }
+
+    // BUG-018: Udyam mandatory + format validation for MSME
+    if (is_msme === "Y") {
+      if (!udyam_reg_number || String(udyam_reg_number).trim() === "") {
+        return NextResponse.json({ error: "Udyam Registration Number is mandatory for MSME vendors." }, { status: 400 });
+      }
+      if (!/^UDYAM-[A-Z]{2}-[0-9]{2}-[0-9]{7}$/.test(String(udyam_reg_number).toUpperCase())) {
+        return NextResponse.json({ error: "Invalid Udyam Registration Number format. Expected: UDYAM-XX-00-0000000 (e.g. UDYAM-MH-12-0001234)." }, { status: 400 });
+      }
+    }
+
+    // BUG-015: Minimum 2 key client references
+    if (!key_client_1 || String(key_client_1).trim() === "" || !key_client_2 || String(key_client_2).trim() === "") {
+      return NextResponse.json({ error: "At least 2 key client references are required (SOP §11)." }, { status: 400 });
+    }
+
+    // BUG-019: File size limit 5 MB
+    const MAX_FILE_SIZE = 5 * 1024 * 1024;
+
     // KYC docs
     const panCopy        = formData.get("pan_copy")         as File | null;
     const msmeCert       = formData.get("msme_cert")        as File | null;
@@ -90,6 +118,12 @@ export async function POST(req: NextRequest) {
     if (!gstCert)          return NextResponse.json({ error: "GST Registration Certificate is mandatory" }, { status: 400 });
     if (is_msme === "Y" && !msmeCert)
       return NextResponse.json({ error: "MSME Certificate is required for MSME vendors" }, { status: 400 });
+
+    // BUG-019: 5 MB file size check
+    if (panCopy.size > MAX_FILE_SIZE)         return NextResponse.json({ error: `PAN Card copy exceeds 5 MB limit (${(panCopy.size / 1024 / 1024).toFixed(1)} MB uploaded).` }, { status: 400 });
+    if (cancelledCheque.size > MAX_FILE_SIZE) return NextResponse.json({ error: `Cancelled Cheque exceeds 5 MB limit (${(cancelledCheque.size / 1024 / 1024).toFixed(1)} MB uploaded).` }, { status: 400 });
+    if (gstCert.size > MAX_FILE_SIZE)         return NextResponse.json({ error: `GST Certificate exceeds 5 MB limit (${(gstCert.size / 1024 / 1024).toFixed(1)} MB uploaded).` }, { status: 400 });
+    if (msmeCert && msmeCert.size > MAX_FILE_SIZE) return NextResponse.json({ error: `MSME Certificate exceeds 5 MB limit (${(msmeCert.size / 1024 / 1024).toFixed(1)} MB uploaded).` }, { status: 400 });
 
     // Duplicate PAN + Company Name check
     const existingVendors = await readSheet("VENDORS");
@@ -120,15 +154,17 @@ export async function POST(req: NextRequest) {
     const now    = new Date().toISOString();
 
     // Upload vendor-level KYC docs to Drive: ROOT/VENDORS/<VEN_ID>/
+    // Drive upload is best-effort — if unreachable (e.g. offline env), registration still proceeds.
+    const noUpload = { web_view_link: "" };
     const [panUpload, chequeUpload, gstUpload] = await Promise.all([
-      uploadFileToDrive(panCopy,         "VENDORS", venId, "pan_card.pdf"),
-      uploadFileToDrive(cancelledCheque, "VENDORS", venId, `${subId}_cancelled_cheque.pdf`),
-      uploadFileToDrive(gstCert,         "VENDORS", venId, `${subId}_gst_certificate.pdf`),
+      uploadFileToDrive(panCopy,         "VENDORS", venId, "pan_card.pdf").catch((e) => { console.warn("[drive] pan_card upload failed:", e.message); return noUpload; }),
+      uploadFileToDrive(cancelledCheque, "VENDORS", venId, `${subId}_cancelled_cheque.pdf`).catch((e) => { console.warn("[drive] cheque upload failed:", e.message); return noUpload; }),
+      uploadFileToDrive(gstCert,         "VENDORS", venId, `${subId}_gst_certificate.pdf`).catch((e) => { console.warn("[drive] gst_cert upload failed:", e.message); return noUpload; }),
     ]);
 
     let msmeCertUrl = "";
     if (msmeCert) {
-      const msmeUpload = await uploadFileToDrive(msmeCert, "VENDORS", venId, "msme_certificate.pdf");
+      const msmeUpload = await uploadFileToDrive(msmeCert, "VENDORS", venId, "msme_certificate.pdf").catch((e) => { console.warn("[drive] msme_cert upload failed:", e.message); return noUpload; });
       msmeCertUrl = msmeUpload.web_view_link;
     }
 

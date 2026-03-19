@@ -8,11 +8,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
 
-const JWT_SECRET = new TextEncoder().encode(
-  process.env.JWT_SECRET ?? "change-me-in-production"
-);
+if (!process.env.JWT_SECRET) {
+  throw new Error(
+    "[middleware] JWT_SECRET environment variable is not set. " +
+    "Set a strong random secret in .env.local before starting the server."
+  );
+}
+const JWT_SECRET = new TextEncoder().encode(process.env.JWT_SECRET);
 
-const PUBLIC_PATHS = ["/auth/", "/api/auth/", "/api/setup/", "/_next/", "/favicon.ico"];
+const PUBLIC_PATHS = ["/auth/", "/api/auth/", "/_next/", "/favicon.ico"];
 
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;

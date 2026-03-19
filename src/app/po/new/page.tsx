@@ -66,6 +66,7 @@ interface Vendor {
   COMPANY_NAME: string;
   EMAIL?: string;
   CONTACT_EMAIL?: string;
+  STATUS?: string;
 }
 
 function CreatePOPage() {
@@ -106,11 +107,14 @@ function CreatePOPage() {
         setPr(prRow);
         setLines(prData.lines ?? []);
 
-        const vendorList: Vendor[] = (vendorData.vendors ?? []).map((v: Record<string, string>) => ({
-          VENDOR_ID:    v.VENDOR_ID,
-          COMPANY_NAME: v.COMPANY_NAME,
-          EMAIL:        v.EMAIL ?? v.CONTACT_EMAIL ?? "",
-        }));
+        const vendorList: Vendor[] = (vendorData.vendors ?? [])
+          .filter((v: Record<string, string>) => v.STATUS === "ACTIVE")
+          .map((v: Record<string, string>) => ({
+            VENDOR_ID:    v.VENDOR_ID,
+            COMPANY_NAME: v.COMPANY_NAME,
+            EMAIL:        v.EMAIL ?? v.CONTACT_EMAIL ?? "",
+            STATUS:       v.STATUS,
+          }));
         setVendors(vendorList);
 
         // Pre-fill vendor from PR
@@ -144,6 +148,10 @@ function CreatePOPage() {
     e.preventDefault();
     if (!vendorId || !deliveryDate) {
       setError("Vendor and Delivery Date are required.");
+      return;
+    }
+    if (!tallyPoNumber.trim()) {
+      setError("Tally PO Number is required before issuing a PO.");
       return;
     }
     setError("");
@@ -217,7 +225,15 @@ function CreatePOPage() {
         <p className="text-sm text-text-secondary">
           <span className="font-mono font-bold text-primary-700">{poId}</span> has been issued to the vendor.
         </p>
-        <div className="flex gap-3 mt-2">
+        <div className="flex gap-3 mt-2 flex-wrap justify-center">
+          <a
+            href={`/po/${poId}/print`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-1.5 text-xs font-bold px-4 py-2 bg-accent-700 text-white rounded-sm hover:bg-accent-600 transition-colors"
+          >
+            <FileText className="w-3.5 h-3.5" /> Download PO as PDF
+          </a>
           <button
             onClick={() => router.push("/po/open")}
             className="flex items-center gap-1.5 text-xs font-bold px-4 py-2 bg-primary-900 text-white rounded-sm hover:bg-primary-800 transition-colors"
@@ -426,14 +442,18 @@ function CreatePOPage() {
               </div>
 
               <div className="space-y-1">
-                <label className="block text-xs font-medium text-text-secondary">Tally PO Number</label>
+                <label className="block text-xs font-medium text-text-secondary">
+                  Tally PO Number <span className="text-danger">*</span>
+                </label>
                 <input
                   type="text"
                   value={tallyPoNumber}
                   onChange={(e) => setTallyPoNumber(e.target.value)}
                   placeholder="e.g. PO/2526/1234"
+                  required
                   className="enterprise-input font-mono"
                 />
+                <p className="text-[11px] text-text-secondary">Must match the PO number in Tally ERP before issuing.</p>
               </div>
 
               <div className="space-y-1">

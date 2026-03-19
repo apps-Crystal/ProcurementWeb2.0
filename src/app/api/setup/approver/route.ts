@@ -19,7 +19,10 @@ export async function GET(req: NextRequest) {
     const password = searchParams.get("password");
     const secret   = searchParams.get("secret");
 
-    const expectedSecret = process.env.SETUP_SECRET ?? "crystal-setup-2024";
+    const expectedSecret = process.env.SETUP_SECRET;
+    if (!expectedSecret) {
+      return NextResponse.json({ error: "Setup endpoint is disabled (SETUP_SECRET not configured)." }, { status: 403 });
+    }
     if (secret !== expectedSecret) {
       return NextResponse.json({ error: "Invalid setup secret." }, { status: 403 });
     }
