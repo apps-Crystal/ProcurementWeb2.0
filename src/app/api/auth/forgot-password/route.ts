@@ -13,6 +13,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
+import nodemailer from "nodemailer";
 import { readSheet, updateRowWhere, appendRowByFields, writeAuditLog } from "@/lib/sheets";
 import { generateResetToken, resetTokenExpiry } from "@/lib/auth";
 
@@ -25,21 +26,40 @@ async function ensureAuthRow(userId: string) {
   }
 }
 
-async function sendResetEmail(email: string, resetLink: string) {
-  // ── Production: use SMTP ────────────────────────────────────────────────────
-  // Configure SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS in .env.local
-  // Uncomment and adapt:
-  //
-  // const transporter = nodemailer.createTransport({...});
-  // await transporter.sendMail({
-  //   from: `"Crystal Group" <${process.env.SMTP_FROM}>`,
-  //   to: email,
-  //   subject: "Password Reset — Crystal Group Procurement",
-  //   html: `<p>Click to reset: <a href="${resetLink}">${resetLink}</a></p><p>Expires in 1 hour.</p>`,
-  // });
+async function sendResetEmail(email: string, resetLink: string, userName: string) {
+  const transporter = nodemailer.createTransport({
+    host: "smtp.gmail.com",
+    port: 587,
+    secure: false,
+    auth: {
+      user: process.env.SMTP_USER,
+      pass: process.env.SMTP_PASS,
+    },
+  });
 
-  // ── Development: log to console ────────────────────────────────────────────
-  console.log(`[AUTH] Password reset link for ${email}: ${resetLink}`);
+  await transporter.sendMail({
+    from: `"Crystal Group Procurement" <${process.env.SMTP_USER}>`,
+    to: email,
+    subject: "Password Reset — Crystal Group Procurement",
+    html: `
+      <div style="font-family:Arial,sans-serif;max-width:480px;margin:0 auto;padding:24px;border:1px solid #e5e7eb;border-radius:8px;">
+        <h2 style="color:#1e3a5f;margin-top:0;">Password Reset Request</h2>
+        <p style="color:#374151;">Hi ${userName},</p>
+        <p style="color:#374151;">We received a request to reset your password for the Crystal Group Procurement system.</p>
+        <p style="color:#374151;">Click the button below to reset your password. This link expires in <strong>1 hour</strong>.</p>
+        <a href="${resetLink}" style="display:inline-block;margin:16px 0;padding:12px 24px;background:#1e3a5f;color:#ffffff;text-decoration:none;border-radius:6px;font-weight:bold;">
+          Reset Password
+        </a>
+        <p style="color:#6b7280;font-size:13px;">If the button doesn't work, copy and paste this link into your browser:</p>
+        <p style="color:#6b7280;font-size:12px;word-break:break-all;">${resetLink}</p>
+        <hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0;" />
+        <p style="color:#9ca3af;font-size:11px;">If you did not request a password reset, please ignore this email. Your password will remain unchanged.</p>
+        <p style="color:#9ca3af;font-size:11px;">— Crystal Group Procurement System</p>
+      </div>
+    `,
+  });
+
+  console.log(`[AUTH] Password reset email sent to ${email}`);
 }
 
 export async function POST(req: NextRequest) {
@@ -72,7 +92,7 @@ export async function POST(req: NextRequest) {
     const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
     const resetLink = `${appUrl}/auth/reset-password?token=${token}`;
 
-    await sendResetEmail(email, resetLink);
+    await sendResetEmail(email, resetLink, user.FULL_NAME ?? "there");
     await writeAuditLog({ userId: user.USER_ID, module: "USERS", recordId: user.USER_ID, action: "PASSWORD_RESET_REQUESTED" });
 
     // In development return the link so it's testable without SMTP
