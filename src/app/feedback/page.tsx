@@ -31,6 +31,7 @@ interface FeedbackRow {
   REPORTED_BY_NAME:    string;
   REPORTED_BY_USER_ID: string;
   ASSIGNED_TO_NAME:    string;
+  ASSIGNED_TO_USER_ID: string;
   CREATED_DATE:        string;
 }
 
