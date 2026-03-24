@@ -196,6 +196,13 @@ export default function PRDetailPage() {
     );
   }
 
+  if (!pr) {
+    return (
+      <div className="flex items-center justify-center h-64 text-text-secondary text-sm">
+        PR not found.
+      </div>
+    );
+  }
 
   const prId    = pr.PR_ID ?? pr.SPR_ID ?? id;
   const prDate  = pr.PR_DATE ?? pr.SPR_DATE ?? "—";
