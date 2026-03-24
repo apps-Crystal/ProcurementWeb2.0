@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   CreditCard,
   Search,
@@ -12,6 +13,7 @@ import {
   Loader2,
 } from "lucide-react";
 import { fmtDate } from "@/lib/utils";
+import { useCurrentUser } from "@/components/auth/AuthProvider";
 
 type DBStatus =
   | "SUBMITTED"
@@ -53,22 +55,31 @@ function computePriority(dueDate: string, isMsme: boolean): "High" | "Normal" {
   return days <= 3 ? "High" : "Normal";
 }
 
+const MY_ACTIONS_STATUS: Record<string, DBStatus> = {
+  Procurement_Team: "SUBMITTED",
+  Accounts:         "PROCUREMENT_VERIFIED",
+  Management:       "ACCOUNTS_VERIFIED",
+  Finance:          "MANAGEMENT_APPROVED",
+};
+
 export default function PaymentQueue() {
+  const router = useRouter();
+  const { user } = useCurrentUser();
   const [payments, setPayments] = useState<PaymentRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
-  const [activeTab, setActiveTab] = useState<"pending" | "released">("pending");
+  const [activeTab, setActiveTab] = useState<"my_actions" | "all_pending" | "held">("my_actions");
 
   useEffect(() => {
     setLoading(true);
-    fetch("/api/payments")
+    fetch("/api/payments?status=ACTIVE")
       .then((r) => r.json())
       .then((data) => {
         const rows: Record<string, string>[] = data.payments ?? [];
         const mapped: PaymentRow[] = rows.map((r) => {
           const isMsme = r.IS_MSME === "Y";
           return {
-            id: r.PAY_ID,
+            id: r.PAYMENT_ID,
             vendor: r.VENDOR_NAME || "—",
             amount: r.NET_PAYABLE
               ? `₹${parseFloat(r.NET_PAYABLE).toLocaleString("en-IN")}`
@@ -86,19 +97,23 @@ export default function PaymentQueue() {
       .finally(() => setLoading(false));
   }, []);
 
+  const myActionStatus = MY_ACTIONS_STATUS[user?.role ?? ""] ?? null;
+
   const filtered = payments.filter((p) => {
-    const isTerminal = p.dbStatus === "RELEASED" || p.dbStatus === "REJECTED";
-    const matchTab = activeTab === "pending" ? !isTerminal : isTerminal;
+    let matchTab = false;
+    if (activeTab === "my_actions")  matchTab = myActionStatus ? p.dbStatus === myActionStatus : p.dbStatus !== "HELD";
+    if (activeTab === "all_pending") matchTab = p.dbStatus !== "HELD";
+    if (activeTab === "held")        matchTab = p.dbStatus === "HELD";
     const q = search.toLowerCase();
     return matchTab && (!q || p.id.toLowerCase().includes(q) || p.vendor.toLowerCase().includes(q));
   });
 
-  const pendingCount = payments.filter(
-    (p) => p.dbStatus !== "RELEASED" && p.dbStatus !== "REJECTED"
-  ).length;
+  const myActionsCount = myActionStatus ? payments.filter((p) => p.dbStatus === myActionStatus).length : 0;
+  const pendingCount   = payments.filter((p) => p.dbStatus !== "HELD").length;
+  const heldCount      = payments.filter((p) => p.dbStatus === "HELD").length;
 
   const overdueAmount = payments
-    .filter((p) => p.priority === "High" && p.dbStatus !== "RELEASED")
+    .filter((p) => p.priority === "High" && p.dbStatus !== "HELD")
     .reduce((sum, p) => sum + (parseFloat(p.amount.replace(/[₹,]/g, "")) || 0), 0);
 
   const renderStage = (current: StageKey, stage: StageKey, label: string) => {
@@ -146,14 +161,18 @@ export default function PaymentQueue() {
       <div className="enterprise-card flex flex-col min-h-[600px]">
         {/* Toolbar */}
         <div className="p-4 border-b border-border bg-primary-50/30 flex flex-col sm:flex-row justify-between gap-4">
-          <div className="flex bg-surface border border-border rounded-sm p-1 shadow-sm">
-            <button onClick={() => setActiveTab("pending")}
-              className={`px-4 py-1.5 text-xs font-bold rounded-sm transition-colors ${activeTab === "pending" ? "bg-primary-900 text-white shadow-sm" : "text-text-secondary hover:text-primary-900"}`}>
-              Pending ({pendingCount})
+          <div className="flex bg-surface border border-border rounded-sm p-1 shadow-sm overflow-x-auto">
+            <button onClick={() => setActiveTab("my_actions")}
+              className={`px-4 py-1.5 text-xs font-bold rounded-sm transition-colors whitespace-nowrap ${activeTab === "my_actions" ? "bg-primary-900 text-white shadow-sm" : "text-text-secondary hover:text-primary-900"}`}>
+              My Actions ({myActionsCount})
             </button>
-            <button onClick={() => setActiveTab("released")}
-              className={`px-4 py-1.5 text-xs font-bold rounded-sm transition-colors ${activeTab === "released" ? "bg-primary-900 text-white shadow-sm" : "text-text-secondary hover:text-primary-900"}`}>
-              Released / Rejected
+            <button onClick={() => setActiveTab("all_pending")}
+              className={`px-4 py-1.5 text-xs font-bold rounded-sm transition-colors whitespace-nowrap ${activeTab === "all_pending" ? "bg-primary-900 text-white shadow-sm" : "text-text-secondary hover:text-primary-900"}`}>
+              All Pending ({pendingCount})
+            </button>
+            <button onClick={() => setActiveTab("held")}
+              className={`px-4 py-1.5 text-xs font-bold rounded-sm transition-colors whitespace-nowrap ${activeTab === "held" ? "bg-warning text-white shadow-sm" : "text-warning-800 hover:text-warning"}`}>
+              On Hold ({heldCount})
             </button>
           </div>
           <div className="relative">
@@ -183,7 +202,7 @@ export default function PaymentQueue() {
               </thead>
               <tbody className="divide-y divide-border">
                 {filtered.map((req) => (
-                  <tr key={req.id} className="hover:bg-primary-50/30 transition-colors cursor-pointer">
+                  <tr key={req.id} onClick={() => router.push(`/payments/${req.id}`)} className="hover:bg-primary-50/30 transition-colors cursor-pointer">
                     <td className="px-6 py-4 font-mono text-primary-700 font-medium">
                       {req.id}
                       {req.priority === "High" && (
@@ -209,7 +228,10 @@ export default function PaymentQueue() {
                       </div>
                     </td>
                     <td className="px-6 py-4 text-right">
-                      <button className="inline-flex items-center text-xs font-bold text-white bg-primary-600 hover:bg-primary-800 px-3 py-1.5 rounded-sm shadow-sm transition-all">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); router.push(`/payments/${req.id}`); }}
+                        className="inline-flex items-center text-xs font-bold text-white bg-primary-600 hover:bg-primary-800 px-3 py-1.5 rounded-sm shadow-sm transition-all"
+                      >
                         Action <ChevronRight className="w-3 h-3 ml-1" />
                       </button>
                     </td>
@@ -230,7 +252,7 @@ export default function PaymentQueue() {
 
         {/* Footer */}
         <div className="p-3 border-t border-border bg-primary-50/30 text-xs text-text-secondary flex justify-between items-center">
-          <span>Showing {filtered.length} of {payments.length} payment requests.</span>
+          <span>Showing {filtered.length} of {pendingCount + heldCount} active payments.</span>
           <div className="flex gap-4">
             <span className="flex items-center gap-1"><CheckCircle2 className="w-3 h-3 text-success" /> Cleared Stage</span>
             <span className="flex items-center gap-1"><AlertCircle className="w-3 h-3 text-warning" /> Pending Stage</span>

@@ -194,14 +194,42 @@ export async function updateRowWhere(
   });
 }
 
-/** Returns the next sequential number for a sheet (row count including header). */
+/** Returns the next sequential number for a sheet using the SEQUENCES counter sheet. */
 export async function getNextSeq(sheetName: string): Promise<number> {
   const sheets = getSheetsClient();
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId: SPREADSHEET_ID,
-    range: `${sheetName}!A:A`,
+    range: "SEQUENCES",
   });
-  return Math.max((res.data.values?.length ?? 1), 1);
+  const rows = res.data.values ?? [];
+  const headers = rows[0] as string[];
+  const nameIdx = headers.indexOf("SHEET_NAME");
+  const seqIdx  = headers.indexOf("LAST_SEQ");
+  const rowIndex = rows.findIndex((r, i) => i > 0 && r[nameIdx] === sheetName);
+
+  if (rowIndex === -1) {
+    // Auto-register new sheet starting at seq 1
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: SPREADSHEET_ID,
+      range: "SEQUENCES!A1",
+      valueInputOption: "USER_ENTERED",
+      requestBody: { values: [[sheetName, 1]] },
+    });
+    return 1;
+  }
+
+  const current = parseInt(rows[rowIndex][seqIdx] || "0", 10);
+  const next = current + 1;
+
+  // Increment counter immediately (best-effort atomic write)
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: SPREADSHEET_ID,
+    range: `SEQUENCES!${String.fromCharCode(65 + seqIdx)}${rowIndex + 1}`,
+    valueInputOption: "USER_ENTERED",
+    requestBody: { values: [[next]] },
+  });
+
+  return next;
 }
 
 /** Deletes all rows in a sheet where a column matches a value. */

@@ -1,335 +1,330 @@
 "use client";
 
 import { Suspense, useEffect, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import {
-  Receipt,
-  FileCheck,
-  FileText,
-  AlertOctagon,
+  Scale,
+  Search,
+  Loader2,
   CheckCircle2,
   AlertTriangle,
-  FileMinus,
-  Maximize2,
-  Loader2,
-  Package
+  ShieldAlert,
+  XCircle,
+  ChevronRight,
+  PlayCircle,
 } from "lucide-react";
+import { fmtDate } from "@/lib/utils";
+import { useCurrentUser } from "@/components/auth/AuthProvider";
 
-interface MatchData {
-  match: Record<string, string>;
-  lines: Record<string, string>[];
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+type MatchStatus = "MATCHED" | "QUANTITY_VARIANCE" | "PRICE_VARIANCE" | "FRAUD_RISK" | "NO_GRN" | "NO_INVOICE";
+
+interface MatchRow {
+  match_id:       string;
+  po_id:          string;
+  grn_id:         string;
+  inv_id:         string;
+  match_status:   MatchStatus;
+  max_qty_var:    string;
+  max_price_var:  string;
+  triggered_by:   string;
+  created_at:     string;
 }
+
+type Tab = "All" | "Matched" | "Variance" | "Risk";
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function StatusBadge({ status }: { status: MatchStatus }) {
+  const map: Record<MatchStatus, { label: string; cls: string; icon: React.ReactNode }> = {
+    MATCHED:           { label: "Matched",           cls: "bg-success/10 text-success border-success/20",           icon: <CheckCircle2 className="w-3 h-3" /> },
+    QUANTITY_VARIANCE: { label: "Qty Variance",      cls: "bg-warning/10 text-warning-800 border-warning/20",       icon: <AlertTriangle className="w-3 h-3" /> },
+    PRICE_VARIANCE:    { label: "Price Variance",    cls: "bg-danger/10 text-danger border-danger/20",              icon: <AlertTriangle className="w-3 h-3" /> },
+    FRAUD_RISK:        { label: "Fraud Risk",        cls: "bg-danger/10 text-danger border-danger/20",              icon: <ShieldAlert className="w-3 h-3" /> },
+    NO_GRN:            { label: "No GRN",            cls: "bg-primary-100 text-primary-700 border-primary-200",     icon: <XCircle className="w-3 h-3" /> },
+    NO_INVOICE:        { label: "No Invoice",        cls: "bg-primary-100 text-primary-700 border-primary-200",     icon: <XCircle className="w-3 h-3" /> },
+  };
+  const s = map[status] ?? map.MATCHED;
+  return (
+    <span className={`inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-sm border ${s.cls}`}>
+      {s.icon} {s.label}
+    </span>
+  );
+}
+
+function fmtAmt(v: string | number | undefined) {
+  const n = parseFloat(String(v ?? "0"));
+  if (isNaN(n)) return "—";
+  return "₹" + n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function VarPill({ pct }: { pct: string }) {
+  const n = parseFloat(pct ?? "0");
+  if (!n) return <span className="text-success font-mono text-[10px]">0%</span>;
+  return (
+    <span className={`font-mono text-[10px] font-bold ${n > 0.5 ? "text-danger" : "text-warning-800"}`}>
+      {n > 0 ? "+" : ""}{n.toFixed(2)}%
+    </span>
+  );
+}
+
+// ── Main ──────────────────────────────────────────────────────────────────────
 
 export default function ThreeWayMatchWrapper() {
   return (
-    <Suspense fallback={<div className="flex items-center justify-center h-96"><Loader2 className="w-8 h-8 animate-spin text-primary-600" /></div>}>
+    <Suspense fallback={<div className="flex items-center justify-center h-64"><Loader2 className="w-8 h-8 animate-spin text-primary-400" /></div>}>
       <ThreeWayMatch />
     </Suspense>
   );
 }
 
 function ThreeWayMatch() {
-  const searchParams = useSearchParams();
-  const matchId = searchParams.get("match_id");
-  const invId = searchParams.get("inv_id");
+  const router    = useRouter();
+  const { user }  = useCurrentUser();
 
-  const [matchData, setMatchData] = useState<MatchData | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [resolution, setResolution] = useState("");
-  const [remarks, setRemarks] = useState("");
-  const [submitting, setSubmitting] = useState(false);
+  // ── List state ──────────────────────────────────────────────────────────────
+  const [matches, setMatches]     = useState<MatchRow[]>([]);
+  const [loadingList, setLoadingList] = useState(true);
+  const [tab, setTab]             = useState<Tab>("All");
+  const [search, setSearch]       = useState("");
 
+  // ── Run-match panel ─────────────────────────────────────────────────────────
+  const [showRunPanel, setShowRunPanel] = useState(false);
+  const [runPoId, setRunPoId]     = useState("");
+  const [runGrnId, setRunGrnId]   = useState("");
+  const [runInvId, setRunInvId]   = useState("");
+  const [running, setRunning]     = useState(false);
+  const [runResult, setRunResult] = useState<{ match_status: MatchStatus; message: string; match_id: string } | null>(null);
+  const [runError, setRunError]   = useState("");
+
+  // ── Load list ────────────────────────────────────────────────────────────────
   useEffect(() => {
-    if (!matchId) return;
-    setLoading(true);
-    fetch(`/api/match?match_id=${matchId}`)
+    loadList();
+  }, []);
+
+  function loadList() {
+    setLoadingList(true);
+    fetch("/api/match")
       .then((r) => r.json())
-      .then((d) => setMatchData(d))
-      .finally(() => setLoading(false));
-  }, [matchId]);
-
-  const handleResolve = async () => {
-    if (!resolution || !matchId) return;
-    setSubmitting(true);
-    await fetch(`/api/match`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ match_id: matchId, resolution_type: resolution, remarks }),
-    });
-    setSubmitting(false);
-    alert("Resolution recorded. Payment queue updated.");
-  };
-
-  const matchStatus = matchData?.match?.MATCH_STATUS ?? "PRICE_VARIANCE";
-  const isVariance = matchStatus !== "MATCHED";
-
-  // Display IDs — use real data if loaded, fall back to demo labels
-  const displayMatchId = matchId ?? matchData?.match?.MATCH_ID ?? "MCH-2503-088";
-  const displayPoId = matchData?.match?.PO_ID ?? "PO-2502-044";
-  const displayGrnId = matchData?.match?.GRN_ID ?? "GRN-2503-010";
-  const displayInvId = invId ?? matchData?.match?.INV_ID ?? "INV-0992";
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-96">
-        <Loader2 className="w-8 h-8 animate-spin text-primary-600" />
-        <span className="ml-3 text-text-secondary">Loading match data...</span>
-      </div>
-    );
+      .then((data) => {
+        const rows: Record<string, string>[] = data.matches ?? [];
+        setMatches(rows.map((r) => ({
+          match_id:      r.MATCH_ID        ?? "",
+          po_id:         r.PO_ID           ?? "—",
+          grn_id:        r.GRN_ID          ?? "—",
+          inv_id:        r.INVOICE_ID      ?? "—",
+          match_status:  (r.MATCH_RESULT   ?? "MATCHED") as MatchStatus,
+          max_qty_var:   r.QTY_VARIANCE    ?? "0",
+          max_price_var: r.RATE_VARIANCE_PCT ?? "0",
+          triggered_by:  r.REVIEWED_BY     ?? "—",
+          created_at:    r.MATCH_TIMESTAMP ?? "",
+        })));
+      })
+      .catch(() => setMatches([]))
+      .finally(() => setLoadingList(false));
   }
 
-  return (
-    <div className="space-y-6 max-w-full mx-auto pb-10">
+  // ── Run match ────────────────────────────────────────────────────────────────
+  async function handleRunMatch() {
+    if (!runPoId.trim() || !runInvId.trim()) { setRunError("PO ID and Invoice ID are required."); return; }
+    setRunning(true);
+    setRunError("");
+    setRunResult(null);
+    try {
+      const res  = await fetch("/api/match", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ po_id: runPoId.trim(), grn_id: runGrnId.trim() || undefined, inv_id: runInvId.trim(), triggered_by: user?.userId ?? "SYSTEM" }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error ?? "Match failed");
+      setRunResult({ match_status: json.match_status, message: json.message, match_id: json.match_id });
+      loadList(); // refresh list
+      if (json.match_id) router.push(`/invoices/match/${json.match_id}`);
+    } catch (e) {
+      setRunError(e instanceof Error ? e.message : "Failed");
+    } finally {
+      setRunning(false);
+    }
+  }
 
+  // ── Filter ───────────────────────────────────────────────────────────────────
+  const filtered = matches.filter((m) => {
+    const matchTab =
+      tab === "All"      ? true :
+      tab === "Matched"  ? m.match_status === "MATCHED" :
+      tab === "Variance" ? (m.match_status === "PRICE_VARIANCE" || m.match_status === "QUANTITY_VARIANCE") :
+                           (m.match_status === "FRAUD_RISK" || m.match_status === "NO_GRN");
+    const q = search.toLowerCase();
+    return matchTab && (!q || m.match_id.toLowerCase().includes(q) || m.po_id.toLowerCase().includes(q) ||
+      m.inv_id.toLowerCase().includes(q) || m.grn_id.toLowerCase().includes(q));
+  });
+
+  const matchedCount  = matches.filter((m) => m.match_status === "MATCHED").length;
+  const varianceCount = matches.filter((m) => m.match_status === "PRICE_VARIANCE" || m.match_status === "QUANTITY_VARIANCE").length;
+  const riskCount     = matches.filter((m) => m.match_status === "FRAUD_RISK" || m.match_status === "NO_GRN").length;
+
+  return (
+    <div className="space-y-6 max-w-7xl mx-auto pb-20">
       {/* Header */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-border pb-4">
         <div>
           <h1 className="text-2xl font-bold text-primary-900 tracking-tight flex items-center gap-2">
-            <AlertOctagon className="w-6 h-6 text-warning" />
-            Three-Way Match Verification
+            <Scale className="w-6 h-6 text-primary-600" /> Three-Way Match
           </h1>
           <p className="text-sm text-text-secondary mt-1">
-            Match ID: {displayMatchId} | Status: {isVariance ? "Pending Resolution" : "Matched"}
+            PO ↔ GRN ↔ Invoice verification. Variances trigger payment holds per SOP §8.4.
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          {isVariance && (
-            <div className="px-3 py-1.5 bg-danger/10 border border-danger/30 text-danger text-xs font-bold rounded-sm flex items-center gap-1.5">
-              <AlertTriangle className="w-4 h-4" />
-              {matchStatus === "PRICE_VARIANCE" && "Price Variance Detected"}
-              {matchStatus === "QUANTITY_VARIANCE" && "Quantity Variance Detected"}
-              {matchStatus === "FRAUD_RISK" && "Fraud Risk — Low AI Confidence"}
-              {matchStatus === "NO_GRN" && "No GRN on File"}
+        <button
+          onClick={() => { setShowRunPanel(!showRunPanel); setRunResult(null); setRunError(""); }}
+          className="h-9 px-4 bg-primary-900 hover:bg-primary-800 text-white text-sm font-medium rounded-sm transition-colors shadow-sm flex items-center gap-2"
+        >
+          <PlayCircle className="w-4 h-4" /> Run New Match
+        </button>
+      </div>
+
+      {/* Run Match Panel */}
+      {showRunPanel && (
+        <div className="enterprise-card p-5 border-t-4 border-t-primary-900 space-y-4">
+          <h2 className="text-sm font-bold text-primary-900 uppercase tracking-wide">Run Three-Way Match</h2>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div>
+              <label className="block text-xs font-medium text-text-secondary mb-1">PO ID <span className="text-danger">*</span></label>
+              <input type="text" className="enterprise-input font-mono" placeholder="PO-2503-0001"
+                value={runPoId} onChange={(e) => setRunPoId(e.target.value)} />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-text-secondary mb-1">GRN ID</label>
+              <input type="text" className="enterprise-input font-mono" placeholder="GRN-2503-0001 (optional)"
+                value={runGrnId} onChange={(e) => setRunGrnId(e.target.value)} />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-text-secondary mb-1">Invoice ID <span className="text-danger">*</span></label>
+              <input type="text" className="enterprise-input font-mono" placeholder="INV-2503-0001"
+                value={runInvId} onChange={(e) => setRunInvId(e.target.value)} />
+            </div>
+          </div>
+          {runError && (
+            <div className="flex items-center gap-2 p-2 bg-danger/10 border border-danger/30 rounded-sm text-xs text-danger">
+              <XCircle className="w-3.5 h-3.5 shrink-0" /> {runError}
             </div>
           )}
-          <button className="h-9 px-4 bg-surface hover:bg-primary-50 text-primary-700 text-sm font-medium rounded-sm border border-primary-200 transition-colors shadow-sm focus:ring-1 focus:ring-primary-500">
-            Escalate
-          </button>
+          {runResult && (
+            <div className={`flex items-start gap-2 p-3 rounded-sm text-xs border ${runResult.match_status === "MATCHED" ? "bg-success/10 border-success/30 text-success" : "bg-warning/10 border-warning/30 text-warning-800"}`}>
+              {runResult.match_status === "MATCHED" ? <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" /> : <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />}
+              <div>
+                <p className="font-bold">{runResult.match_status.replace(/_/g, " ")}</p>
+                <p className="mt-0.5">{runResult.message}</p>
+              </div>
+            </div>
+          )}
           <button
-            onClick={handleResolve}
-            disabled={!resolution || submitting}
-            className="h-9 px-4 bg-primary-900 hover:bg-primary-800 text-white text-sm font-medium rounded-sm border border-primary-950 transition-colors shadow-sm focus:ring-1 focus:ring-accent-500 disabled:opacity-50 disabled:cursor-not-allowed"
+            onClick={handleRunMatch}
+            disabled={running}
+            className="h-9 px-6 bg-primary-900 hover:bg-primary-800 text-white text-sm font-bold rounded-sm transition-colors disabled:opacity-50 flex items-center gap-2"
           >
-            {submitting ? "Saving..." : "Resolve Match"}
+            {running ? <><Loader2 className="w-4 h-4 animate-spin" /> Running…</> : <><PlayCircle className="w-4 h-4" /> Run Match</>}
           </button>
+        </div>
+      )}
+
+      {/* Summary cards */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="enterprise-card p-4 flex flex-col items-center justify-center text-center">
+          <span className="text-3xl font-mono font-bold text-primary-900">{matches.length}</span>
+          <span className="text-xs font-bold text-text-secondary uppercase tracking-wider mt-1">Total Matches</span>
+        </div>
+        <div className="enterprise-card p-4 flex flex-col items-center justify-center text-center">
+          <span className="text-3xl font-mono font-bold text-success">{matchedCount}</span>
+          <span className="text-xs font-bold text-text-secondary uppercase tracking-wider mt-1">Matched</span>
+        </div>
+        <div className="enterprise-card p-4 flex flex-col items-center justify-center text-center">
+          <span className="text-3xl font-mono font-bold text-warning-800">{varianceCount}</span>
+          <span className="text-xs font-bold text-text-secondary uppercase tracking-wider mt-1">Variances</span>
+        </div>
+        <div className="enterprise-card p-4 flex flex-col items-center justify-center text-center">
+          <span className="text-3xl font-mono font-bold text-danger">{riskCount}</span>
+          <span className="text-xs font-bold text-text-secondary uppercase tracking-wider mt-1">Fraud / No GRN</span>
         </div>
       </div>
 
-      {/* 3-Column Split View */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 h-[calc(100vh-200px)] min-h-[600px]">
-
-        {/* Column 1: Purchase Order */}
-        <div className="enterprise-card flex flex-col overflow-hidden">
-          <div className="p-3 bg-primary-900 text-white border-b border-primary-950 flex justify-between items-center">
-            <div className="flex items-center gap-2">
-              <FileText className="w-4 h-4 text-accent-400" />
-              <span className="text-sm font-bold tracking-wide">{displayPoId}</span>
-            </div>
-            <span className="text-[10px] font-mono bg-primary-800 px-1.5 py-0.5 rounded-sm">TechFlow Systems</span>
+      {/* Match list */}
+      <div className="enterprise-card flex flex-col">
+        <div className="p-4 border-b border-border bg-primary-50/30 flex flex-col sm:flex-row justify-between gap-4">
+          <div className="flex bg-surface border border-border rounded-sm p-1 shadow-sm overflow-x-auto gap-0.5">
+            {(["All", "Matched", "Variance", "Risk"] as Tab[]).map((t) => {
+              const count = t === "All" ? matches.length : t === "Matched" ? matchedCount : t === "Variance" ? varianceCount : riskCount;
+              const activeMap: Record<Tab, string> = { All: "bg-primary-900 text-white", Matched: "bg-success text-white", Variance: "bg-warning text-white", Risk: "bg-danger text-white" };
+              const inactiveMap: Record<Tab, string> = { All: "text-text-secondary hover:text-primary-900", Matched: "text-success hover:text-success/80", Variance: "text-warning-800 hover:text-warning", Risk: "text-danger hover:text-danger/80" };
+              return (
+                <button key={t} onClick={() => setTab(t)}
+                  className={`px-4 py-1.5 text-xs font-bold rounded-sm transition-colors whitespace-nowrap ${tab === t ? activeMap[t] : inactiveMap[t]}`}>
+                  {t} ({count})
+                </button>
+              );
+            })}
           </div>
-          <div className="p-4 bg-surface flex-1 overflow-y-auto custom-scrollbar">
-            <div className="grid grid-cols-2 gap-4 text-xs mb-6 pb-4 border-b border-border">
-              <div>
-                <span className="block text-text-secondary mb-1">Date</span>
-                <span className="font-medium text-text-primary">15-Feb-2026</span>
-              </div>
-              <div>
-                <span className="block text-text-secondary mb-1">Terms</span>
-                <span className="font-medium text-text-primary">30 Days</span>
-              </div>
-              <div>
-                <span className="block text-text-secondary mb-1">Total Value</span>
-                <span className="font-mono font-bold text-primary-900">₹1,18,000.00</span>
-              </div>
-            </div>
-            <div className="space-y-4">
-              <div className="p-3 border border-border bg-primary-50/30 rounded-sm">
-                <div className="text-xs font-bold text-primary-900 mb-2">1. Developer Laptops (i7, 32GB)</div>
-                <div className="flex justify-between text-xs text-text-secondary mb-1">
-                  <span>Qty Ordered:</span> <span className="font-mono text-text-primary font-medium">10 Nos</span>
-                </div>
-                <div className="flex justify-between text-xs text-text-secondary mb-1">
-                  <span>Unit Price:</span> <span className="font-mono text-text-primary font-medium">₹1,00,000</span>
-                </div>
-                <div className="flex justify-between text-xs text-primary-900 font-bold border-t border-border mt-2 pt-2">
-                  <span>Line Total:</span> <span className="font-mono">₹10,00,000</span>
-                </div>
-              </div>
-            </div>
+          <div className="relative">
+            <Search className="w-4 h-4 absolute left-2.5 top-2 text-text-secondary" />
+            <input type="text" placeholder="Search Match ID, PO, Invoice…" value={search}
+              onChange={(e) => setSearch(e.target.value)} className="enterprise-input pl-8 w-64" />
           </div>
         </div>
 
-        {/* Column 2: GRN */}
-        <div className="enterprise-card flex flex-col overflow-hidden">
-          <div className="p-3 bg-primary-800 text-white border-b border-primary-900 flex justify-between items-center">
-            <div className="flex items-center gap-2">
-              <Package className="w-4 h-4 text-success" />
-              <span className="text-sm font-bold tracking-wide">{displayGrnId}</span>
+        <div className="overflow-auto">
+          {loadingList ? (
+            <div className="flex items-center justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-primary-400" /></div>
+          ) : filtered.length === 0 ? (
+            <div className="px-6 py-14 text-center text-text-secondary">
+              <Scale className="w-8 h-8 mx-auto mb-2 opacity-30" />
+              <p className="text-sm">No match records found.</p>
             </div>
-            <span className="text-[10px] font-mono bg-primary-700 px-1.5 py-0.5 rounded-sm">HO Site WH</span>
-          </div>
-          <div className="p-4 bg-surface flex-1 overflow-y-auto custom-scrollbar">
-            <div className="grid grid-cols-2 gap-4 text-xs mb-6 pb-4 border-b border-border">
-              <div>
-                <span className="block text-text-secondary mb-1">Date Received</span>
-                <span className="font-medium text-text-primary">01-Mar-2026</span>
-              </div>
-              <div>
-                <span className="block text-text-secondary mb-1">Challan</span>
-                <span className="font-medium text-text-primary font-mono">DC-8849</span>
-              </div>
-              <div>
-                <span className="block text-text-secondary mb-1">Verified By</span>
-                <span className="font-medium text-primary-900">R. Sharma</span>
-              </div>
-            </div>
-            <div className="space-y-4">
-              <div className="p-3 border border-success/30 bg-success/5 rounded-sm relative">
-                <CheckCircle2 className="w-4 h-4 text-success absolute top-3 right-3" />
-                <div className="text-xs font-bold text-primary-900 mb-2 pr-6">1. Developer Laptops (i7, 32GB)</div>
-                <div className="flex justify-between text-xs text-text-secondary mb-1">
-                  <span>Qty Received:</span> <span className="font-mono text-text-primary font-medium">10 Nos</span>
-                </div>
-                <div className="flex justify-between text-xs text-text-secondary mb-1">
-                  <span>Qty Accepted:</span> <span className="font-mono text-success font-bold">10 Nos</span>
-                </div>
-                <div className="flex justify-between text-xs text-text-secondary mb-1">
-                  <span>Condition:</span> <span className="text-text-primary font-medium">Good</span>
-                </div>
-                <div className="mt-2 pt-2 border-t border-success/20">
-                  <button className="text-[10px] text-primary-600 font-bold uppercase tracking-wider flex items-center gap-1 hover:text-primary-800">
-                    <FileCheck className="w-3 h-3" /> View Inspection Docs
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
+          ) : (
+            <table className="w-full text-sm text-left whitespace-nowrap">
+              <thead className="text-[11px] text-text-secondary bg-surface border-b border-border uppercase tracking-wider">
+                <tr>
+                  <th className="px-4 py-3 font-semibold">Match ID</th>
+                  <th className="px-4 py-3 font-semibold">PO</th>
+                  <th className="px-4 py-3 font-semibold">GRN</th>
+                  <th className="px-4 py-3 font-semibold">Invoice</th>
+                  <th className="px-4 py-3 font-semibold">Status</th>
+                  <th className="px-4 py-3 font-semibold text-right">Price Var%</th>
+                  <th className="px-4 py-3 font-semibold text-right">Qty Var%</th>
+                  <th className="px-4 py-3 font-semibold">Date</th>
+                  <th className="px-4 py-3 font-semibold w-24"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {filtered.map((m) => (
+                  <tr key={m.match_id} className="transition-colors hover:bg-primary-50/20">
+                    <td className="px-4 py-3 font-mono text-xs font-bold text-primary-700">{m.match_id}</td>
+                    <td className="px-4 py-3 font-mono text-xs text-text-secondary">{m.po_id}</td>
+                    <td className="px-4 py-3 font-mono text-xs text-text-secondary">{m.grn_id || "—"}</td>
+                    <td className="px-4 py-3 font-mono text-xs text-text-secondary">{m.inv_id}</td>
+                    <td className="px-4 py-3"><StatusBadge status={m.match_status} /></td>
+                    <td className="px-4 py-3 text-right"><VarPill pct={m.max_price_var} /></td>
+                    <td className="px-4 py-3 text-right"><VarPill pct={m.max_qty_var} /></td>
+                    <td className="px-4 py-3 text-xs text-text-secondary">{fmtDate(m.created_at)}</td>
+                    <td className="px-4 py-3">
+                      <button
+                        onClick={() => router.push(`/invoices/match/${m.match_id}`)}
+                        className="inline-flex items-center gap-1 text-[10px] font-bold text-primary-700 hover:text-primary-900 bg-primary-50 hover:bg-primary-100 border border-primary-200 px-2 py-1 rounded-sm transition-colors"
+                      >
+                        Details <ChevronRight className="w-3 h-3" />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </div>
+      </div>
 
-        {/* Column 3: Vendor Invoice (AI Extracted) */}
-        <div className={`enterprise-card flex flex-col overflow-hidden ${isVariance ? "border-2 border-warning/50" : "border-2 border-success/40"}`}>
-          <div className="p-3 bg-surface border-b border-border flex justify-between items-center relative overflow-hidden">
-            <div className={`absolute inset-0 pointer-events-none ${isVariance ? "bg-warning/10" : "bg-success/5"}`}></div>
-            <div className="flex items-center gap-2 relative z-10">
-              <Receipt className={`w-4 h-4 ${isVariance ? "text-warning" : "text-success"}`} />
-              <span className="text-sm font-bold text-primary-900 tracking-wide">{displayInvId}</span>
-            </div>
-            <div className="flex gap-2 relative z-10">
-              <span className="text-[10px] font-bold bg-success/10 text-success px-1.5 py-0.5 rounded-sm border border-success/20">
-                AI {matchData?.match?.AI_CONFIDENCE_SCORE ?? "98"}%
-              </span>
-              <button className="text-primary-600 hover:bg-primary-50 p-1 rounded-sm">
-                <Maximize2 className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          </div>
-          <div className="p-4 bg-surface flex-1 overflow-y-auto custom-scrollbar relative">
-            <div className="grid grid-cols-2 gap-4 text-xs mb-6 pb-4 border-b border-border">
-              <div>
-                <span className="block text-text-secondary mb-1">Invoice Date</span>
-                <span className="font-medium text-text-primary">28-Feb-2026</span>
-              </div>
-              <div>
-                <span className="block text-text-secondary mb-1">Due Date</span>
-                <span className="font-medium text-warning font-bold">30-Mar-2026</span>
-              </div>
-              <div>
-                <span className="block text-text-secondary mb-1">Total Billed</span>
-                <span className={`font-mono font-bold text-sm ${isVariance ? "text-danger" : "text-success"}`}>₹1,39,240.00</span>
-              </div>
-            </div>
-
-            <div className="space-y-4">
-              <div className={`p-3 rounded-sm relative shadow-sm ${isVariance ? "border-2 border-warning/50 bg-surface" : "border border-success/30 bg-success/5"}`}>
-                {isVariance
-                  ? <AlertTriangle className="w-4 h-4 text-warning absolute top-3 right-3" />
-                  : <CheckCircle2 className="w-4 h-4 text-success absolute top-3 right-3" />
-                }
-                <div className="text-xs font-bold text-primary-900 mb-2">1. Dev Laptops 32GB</div>
-                <div className="flex justify-between text-xs text-text-secondary mb-1">
-                  <span>Qty Billed:</span>
-                  <span className="font-mono text-text-primary font-medium">10 Nos <span className="text-success text-[10px] ml-1">(GRN Match)</span></span>
-                </div>
-
-                {isVariance && (
-                  <>
-                    <div className="flex justify-between items-center text-xs mt-2 p-1.5 bg-danger/5 border border-danger/20 rounded-sm">
-                      <span className="text-danger font-bold flex items-center gap-1">
-                        <FileMinus className="w-3 h-3" /> Unit Rate:
-                      </span>
-                      <div className="text-right">
-                        <span className="font-mono text-danger font-bold line-through text-[10px] mr-1">₹1,00,000</span>
-                        <span className="font-mono text-danger font-bold text-sm">₹1,18,000</span>
-                      </div>
-                    </div>
-                    <div className="text-[9px] text-danger text-right mt-0.5 font-medium">
-                      +{matchData?.lines?.[0]?.PRICE_VARIANCE_PCT ?? "18"}% Above PO Rate
-                    </div>
-                  </>
-                )}
-
-                <div className="flex justify-between text-xs text-primary-900 font-bold border-t border-border mt-3 pt-2">
-                  <span>Line Total:</span> <span className="font-mono">₹11,80,000</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Resolution Panel */}
-            <div className="mt-8 p-3 bg-primary-50/50 border border-primary-100 rounded-sm">
-              <h3 className="text-xs font-bold text-primary-900 mb-2 uppercase tracking-wide">Resolution Options</h3>
-              <div className="space-y-2">
-                <label className="flex items-start gap-2 cursor-pointer p-2 rounded-sm hover:bg-surface border border-transparent hover:border-primary-200 transition-colors">
-                  <input
-                    type="radio"
-                    name="resolution"
-                    value="DEBIT_NOTE"
-                    className="mt-0.5 accent-primary-600"
-                    onChange={(e) => setResolution(e.target.value)}
-                  />
-                  <div className="text-xs">
-                    <span className="font-bold text-primary-900 block">Create Debit Note</span>
-                    <span className="text-text-secondary">Process payment for original PO value; recover variance.</span>
-                  </div>
-                </label>
-                <label className="flex items-start gap-2 cursor-pointer p-2 rounded-sm hover:bg-surface border border-transparent hover:border-primary-200 transition-colors">
-                  <input
-                    type="radio"
-                    name="resolution"
-                    value="ACCEPT_VARIANCE"
-                    className="mt-0.5 accent-primary-600"
-                    onChange={(e) => setResolution(e.target.value)}
-                  />
-                  <div className="text-xs">
-                    <span className="font-bold text-primary-900 block">Accept Variance</span>
-                    <span className="text-text-secondary">Approve higher rate. Requires Management override.</span>
-                  </div>
-                </label>
-                <label className="flex items-start gap-2 cursor-pointer p-2 rounded-sm hover:bg-surface border border-transparent hover:border-primary-200 transition-colors">
-                  <input
-                    type="radio"
-                    name="resolution"
-                    value="BLOCK_INVOICE"
-                    className="mt-0.5 accent-primary-600"
-                    onChange={(e) => setResolution(e.target.value)}
-                  />
-                  <div className="text-xs">
-                    <span className="font-bold text-danger block">Block &amp; Return to Vendor</span>
-                    <span className="text-text-secondary">Reject invoice due to severe pricing error.</span>
-                  </div>
-                </label>
-
-                <textarea
-                  className="mt-3 enterprise-input h-16 resize-none w-full"
-                  placeholder="Enter resolution remarks..."
-                  value={remarks}
-                  onChange={(e) => setRemarks(e.target.value)}
-                />
-              </div>
-            </div>
-
-          </div>
-        </div>
-
+      <div className="bg-primary-50 border border-primary-200 text-primary-700 text-[11px] font-bold tracking-wide uppercase p-2 rounded-sm flex items-center justify-center text-center">
+        ⚑ Audit: All match results and payment decisions are logged. — SOP §8.4
       </div>
     </div>
   );

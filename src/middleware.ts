@@ -17,12 +17,47 @@ if (!process.env.JWT_SECRET) {
 const JWT_SECRET = new TextEncoder().encode(process.env.JWT_SECRET);
 
 const PUBLIC_PATHS = ["/auth/", "/api/auth/", "/_next/", "/favicon.ico"];
+// Vendor-facing public routes (no login required)
+const PUBLIC_PATTERNS = [/^\/api\/po\/[^/]+\/vendor-ack$/];
+
+// ── Method allowlist — enforced before JWT check ────────────────────────────
+const ALLOWED_METHODS: Record<string, string[]> = {
+  "/api/pr/mpr":           ["GET", "POST"],
+  "/api/pr/spr":           ["GET", "POST"],
+  "/api/po":               ["GET", "POST"],
+  "/api/grn":              ["GET", "POST"],
+  "/api/srn":              ["GET", "POST", "PATCH"],
+  "/api/vendors":          ["GET", "POST"],
+  "/api/payments":         ["GET", "POST"],
+  "/api/match":            ["GET", "POST", "PATCH"],
+  "/api/flags":            ["GET", "POST"],
+  "/api/invoices/upload":  ["GET", "POST"],
+  "/api/admin/users":      ["GET", "POST"],
+  "/api/reports":          ["GET"],
+  "/api/search":           ["GET"],
+  "/api/dropdowns":        ["GET"],
+  "/api/auth/login":       ["POST"],
+  "/api/auth/logout":      ["POST"],
+  "/api/auth/me":          ["GET"],
+};
 
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
+  // Reject unsupported methods on known API routes (returns proper JSON 405)
+  const allowed = ALLOWED_METHODS[pathname];
+  if (allowed && !allowed.includes(req.method)) {
+    return NextResponse.json(
+      { error: `Method ${req.method} not allowed. Supported: ${allowed.join(", ")}` },
+      { status: 405, headers: { Allow: allowed.join(", ") } }
+    );
+  }
+
   // Allow public paths
   if (PUBLIC_PATHS.some((p) => pathname.startsWith(p))) {
+    return NextResponse.next();
+  }
+  if (PUBLIC_PATTERNS.some((r) => r.test(pathname))) {
     return NextResponse.next();
   }
 

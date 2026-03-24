@@ -31,6 +31,7 @@ interface LineItem {
   hsn_code: string;
   item_purpose: string;
   last_purchase_price: number;
+  _aiOverridden?: boolean;
 }
 
 export default function EditMPR() {
@@ -113,6 +114,7 @@ export default function EditMPR() {
             hsn_code: l.HSN_CODE ?? "",
             item_purpose: l.ITEM_PURPOSE ?? "",
             last_purchase_price: parseFloat(l.LAST_PURCHASE_PRICE ?? "0") || 0,
+            _aiOverridden: l.AI_OVERRIDDEN === "Y",
           })));
         }
       })
@@ -162,9 +164,12 @@ export default function EditMPR() {
         advance_percent: advancePercent,
         credit_period_days: creditDays,
         retention_amount: retentionAmount,
-        lines: lines.map(({ id: _id, ...l }) => l),
+        lines: lines.map(({ id: _id, _aiOverridden, ...l }) => ({
+          ...l,
+          ai_overridden: _aiOverridden ? "Y" : "",
+        })),
         submit,
-        ai_extracted: aiExtracted,
+        ai_extracted: aiExtracted ? "Y" : "N",
       }));
       if (quotationFile)  fd.append("quotation",  quotationFile);
       if (proformaFile)   fd.append("proforma",   proformaFile);
@@ -406,15 +411,14 @@ export default function EditMPR() {
                   </span>
                 )}
               </div>
-              {aiExtracted ? (
+              {aiExtracted && (
                 <button onClick={handleClearAiExtract} className="h-7 px-3 bg-surface border border-warning/40 text-warning-800 hover:bg-warning/10 text-xs font-semibold rounded-sm transition-colors flex items-center gap-1">
                   <RotateCcw className="w-3 h-3" /> Enter Manually
                 </button>
-              ) : (
-                <button onClick={addLine} className="h-7 px-3 bg-surface border border-primary-200 text-primary-700 hover:bg-primary-50 text-xs font-semibold rounded-sm transition-colors flex items-center gap-1 shadow-sm">
-                  <Plus className="w-3.5 h-3.5" /> Add Row
-                </button>
               )}
+              <button onClick={addLine} className="h-7 px-3 bg-surface border border-primary-200 text-primary-700 hover:bg-primary-50 text-xs font-semibold rounded-sm transition-colors flex items-center gap-1 shadow-sm">
+                <Plus className="w-3.5 h-3.5" /> Add Row
+              </button>
             </div>
 
             <div className="flex-1 overflow-x-auto p-0">
@@ -434,8 +438,13 @@ export default function EditMPR() {
                 </thead>
                 <tbody className="divide-y divide-border">
                   {lines.map((line, index) => (
-                    <tr key={line.id} className="hover:bg-primary-50/30 transition-colors focus-within:bg-primary-50/30">
-                      <td className="px-3 py-2 text-xs font-medium text-text-secondary text-center">{index + 1}</td>
+                    <tr key={line.id} className={`transition-colors focus-within:bg-primary-50/30 ${line._aiOverridden ? "border-l-2 border-amber-400 bg-amber-50/40" : "hover:bg-primary-50/30"}`}>
+                      <td className="px-3 py-2 text-xs font-medium text-text-secondary text-center">
+                        {index + 1}
+                        {line._aiOverridden && (
+                          <span className="block text-[8px] font-bold text-amber-600 bg-amber-100 rounded-sm px-0.5 mt-0.5 leading-tight">AI Edited</span>
+                        )}
+                      </td>
                       <td className="px-3 py-2">
                         <input type="text" className="w-full bg-transparent border-0 focus:ring-1 focus:ring-primary-500 rounded-sm px-1 py-1 text-xs" placeholder="Describe item…" value={line.item_description} onChange={(e) => updateLine(line.id, "item_description", e.target.value)} />
                       </td>
@@ -449,22 +458,18 @@ export default function EditMPR() {
                         </select>
                       </td>
                       <td className="px-3 py-2">
-                        <input type="number" readOnly={aiExtracted} className={`w-full border rounded-sm px-2 py-1 text-xs text-right ${aiExtracted ? "bg-primary-50/80 border-transparent text-primary-700 font-semibold pointer-events-none" : "bg-surface border-border focus:ring-1 focus:ring-primary-500"}`} value={line.qty || ""} onChange={(e) => !aiExtracted && updateLine(line.id, "qty", parseFloat(e.target.value) || 0)} />
+                        <input type="number" className="w-full border rounded-sm px-2 py-1 text-xs text-right bg-surface border-border focus:ring-1 focus:ring-primary-500" value={line.qty || ""} onChange={(e) => updateLine(line.id, "qty", parseFloat(e.target.value) || 0)} />
                       </td>
                       <td className="px-3 py-2">
-                        <input type="number" readOnly={aiExtracted} className={`w-full border rounded-sm px-2 py-1 text-xs text-right ${aiExtracted ? "bg-primary-50/80 border-transparent text-primary-700 font-semibold pointer-events-none" : "bg-surface border-border focus:ring-1 focus:ring-primary-500"}`} value={line.rate || ""} onChange={(e) => !aiExtracted && updateLine(line.id, "rate", parseFloat(e.target.value) || 0)} />
+                        <input type="number" className="w-full border rounded-sm px-2 py-1 text-xs text-right bg-surface border-border focus:ring-1 focus:ring-primary-500" value={line.rate || ""} onChange={(e) => updateLine(line.id, "rate", parseFloat(e.target.value) || 0)} />
                       </td>
                       <td className="px-3 py-2">
-                        {aiExtracted ? (
-                          <input readOnly className="w-full bg-primary-50/80 border-transparent text-primary-700 font-semibold pointer-events-none rounded-sm px-1 py-1 text-xs text-center" value={`${line.gst_percent}%`} />
-                        ) : (
-                          <select className="w-full bg-surface border border-border focus:ring-1 focus:ring-primary-500 rounded-sm px-1 py-1 text-xs" value={line.gst_percent} onChange={(e) => updateLine(line.id, "gst_percent", parseFloat(e.target.value))}>
-                            {opts(dropdowns, "GST_PERCENT", [
-                              { value: "0", label: "0" }, { value: "5", label: "5" },
-                              { value: "12", label: "12" }, { value: "18", label: "18" }, { value: "28", label: "28" },
-                            ]).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-                          </select>
-                        )}
+                        <select className="w-full bg-surface border border-border focus:ring-1 focus:ring-primary-500 rounded-sm px-1 py-1 text-xs" value={line.gst_percent} onChange={(e) => updateLine(line.id, "gst_percent", parseFloat(e.target.value))}>
+                          {opts(dropdowns, "GST_PERCENT", [
+                            { value: "0", label: "0" }, { value: "5", label: "5" },
+                            { value: "12", label: "12" }, { value: "18", label: "18" }, { value: "28", label: "28" },
+                          ]).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                        </select>
                       </td>
                       <td className="px-3 py-2">
                         <input type="text" className="w-full bg-surface border border-border focus:ring-1 focus:ring-primary-500 rounded-sm px-2 py-1 text-xs" placeholder="e.g. 8471" value={line.hsn_code} onChange={(e) => updateLine(line.id, "hsn_code", e.target.value)} />
@@ -473,11 +478,9 @@ export default function EditMPR() {
                         <input readOnly className="w-full bg-primary-50/50 border border-transparent font-medium rounded-sm px-2 py-1 text-xs text-right text-primary-900 pointer-events-none" value={(line.qty * line.rate).toLocaleString("en-IN", { minimumFractionDigits: 2 })} />
                       </td>
                       <td className="px-3 py-2 text-center">
-                        {!aiExtracted && (
-                          <button onClick={() => removeLine(line.id)} className="p-1 text-text-secondary hover:text-danger hover:bg-danger/10 rounded-sm transition-colors">
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        )}
+                        <button onClick={() => removeLine(line.id)} className="p-1 text-text-secondary hover:text-danger hover:bg-danger/10 rounded-sm transition-colors">
+                          <Trash2 className="w-4 h-4" />
+                        </button>
                       </td>
                     </tr>
                   ))}

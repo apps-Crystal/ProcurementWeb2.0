@@ -41,6 +41,15 @@ const TRIGGER_LABELS: Record<string, string> = {
 
 const DEFAULT_TRANCHE_NAMES = ["Advance", "Running", "Milestone", "Final", "Custom"];
 
+const TRIGGER_TO_TRANCHE: Record<string, string> = {
+  PO_ACCEPTANCE: "Advance",
+  GRN_PARTIAL:   "Running",
+  GRN_FINAL:     "Final",
+  MILESTONE:     "Milestone",
+  INVOICE:       "Final",
+  MANUAL:        "Custom",
+};
+
 // ── Component ──────────────────────────────────────────────────────────────
 
 export default function NewSPR() {
@@ -105,7 +114,17 @@ export default function NewSPR() {
   };
 
   const updateTranche = (id: number, field: keyof PaymentTranche, value: string | number) => {
-    setTranches(prev => prev.map(t => t.id === id ? { ...t, [field]: value } : t));
+    setTranches(prev => prev.map(t => {
+      if (t.id !== id) return t;
+      const updated = { ...t, [field]: value };
+      if (field === "trigger_event") {
+        const suggested = TRIGGER_TO_TRANCHE[value as string];
+        if (suggested && DEFAULT_TRANCHE_NAMES.includes(t.tranche_name)) {
+          updated.tranche_name = suggested;
+        }
+      }
+      return updated;
+    }));
   };
 
   const dropdowns = useDropdowns(

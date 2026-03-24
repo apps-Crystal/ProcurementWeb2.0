@@ -33,8 +33,8 @@ export async function PATCH(
   const rows = await readSheet(sheet);
   const pr   = rows.find((r) => r[idField] === id);
   if (!pr) return NextResponse.json({ error: "PR not found" }, { status: 404 });
-  if (pr.STATUS !== "DRAFT")
-    return NextResponse.json({ error: "Only DRAFT PRs can be submitted this way" }, { status: 400 });
+  if (!["DRAFT", "REVISION_REQUESTED"].includes(pr.STATUS))
+    return NextResponse.json({ error: "Only DRAFT or REVISION_REQUESTED PRs can be submitted" }, { status: 400 });
 
   // Validate required fields are already populated in the draft
   if (isSpr) {

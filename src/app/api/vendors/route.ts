@@ -33,6 +33,19 @@ export async function POST(req: NextRequest) {
   try {
     const formData = await req.formData();
 
+    // BUG-VND-001: Read caller identity from JWT headers, not form body
+    const callerId   = req.headers.get("x-user-id")   ?? "SYSTEM";
+    const callerRole = req.headers.get("x-user-role")  ?? "";
+
+    // BUG-VND-002: Role enforcement — only Procurement_Team or System_Admin may register vendors
+    const REGISTER_ALLOWED_ROLES = ["Procurement_Team", "System_Admin"];
+    if (!REGISTER_ALLOWED_ROLES.includes(callerRole)) {
+      return NextResponse.json(
+        { error: "Forbidden: only Procurement_Team or System_Admin may register vendors (SOP §11)." },
+        { status: 403 }
+      );
+    }
+
     const dataRaw = formData.get("data") as string;
     if (!dataRaw) return NextResponse.json({ error: "Missing 'data' field" }, { status: 400 });
     const body = JSON.parse(dataRaw);
@@ -68,7 +81,6 @@ export async function POST(req: NextRequest) {
       key_client_2 = "",
       work_experience_notes = "",
       capacity_scale = "",
-      registered_by,
     } = body;
 
     // Mandatory field check
@@ -147,10 +159,17 @@ export async function POST(req: NextRequest) {
     }
 
     // Generate IDs
-    const seq    = await getNextSeq("VENDORS");
-    const venId  = generateId("VEN", seq);
-    const subSeq = await getNextSeq("VENDOR_SUB_PROFILES");
-    const subId  = generateId("SUB", subSeq);
+    let seq    = await getNextSeq("VENDORS");
+    let venId  = generateId("VEN", seq);
+    if (existingVendors.some((r: any) => r.VENDOR_ID === venId)) {
+      venId = generateId("VEN", await getNextSeq("VENDORS"));
+    }
+    let subSeq = await getNextSeq("VENDOR_SUB_PROFILES");
+    let subId  = generateId("SUB", subSeq);
+    const existingSubs = await readSheet("VENDOR_SUB_PROFILES");
+    if (existingSubs.some((r: any) => r.SUB_PROFILE_ID === subId)) {
+      subId = generateId("SUB", await getNextSeq("VENDOR_SUB_PROFILES"));
+    }
     const now    = new Date().toISOString();
 
     // Upload vendor-level KYC docs to Drive: ROOT/VENDORS/<VEN_ID>/
@@ -193,11 +212,11 @@ export async function POST(req: NextRequest) {
       REFERENCE_VERIFIED:    "N",
       STATUS:                "PENDING_KYC",
       DEACTIVATION_REASON:   "",
-      REGISTERED_BY:         registered_by ?? "SYSTEM",
+      REGISTERED_BY:         callerId,
       REGISTERED_DATE:       now,
       APPROVED_BY:           "",
       APPROVED_DATE:         "",
-      LAST_UPDATED_BY:       registered_by ?? "SYSTEM",
+      LAST_UPDATED_BY:       callerId,
       LAST_UPDATED_DATE:     now,
       REMARKS:               `Entity: ${entity_type}; Trade name: ${trade_name}`,
     });
@@ -219,16 +238,16 @@ export async function POST(req: NextRequest) {
       IS_PRIMARY:              "Y",
       STATUS:                  "PENDING_KYC",
       DEACTIVATION_REASON:     "",
-      CREATED_BY:              registered_by ?? "SYSTEM",
+      CREATED_BY:              callerId,
       CREATED_DATE:            now,
       VERIFIED_BY:             "",
       VERIFIED_DATE:           "",
-      LAST_UPDATED_BY:         registered_by ?? "SYSTEM",
+      LAST_UPDATED_BY:         callerId,
       LAST_UPDATED_DATE:       now,
       REMARKS:                 "",
     });
 
-    await writeAuditLog({ userId: registered_by ?? "SYSTEM", module: "VENDORS", recordId: venId, action: "VENDOR_REGISTER" });
+    await writeAuditLog({ userId: callerId, module: "VENDORS", recordId: venId, action: "VENDOR_REGISTER" });
 
     return NextResponse.json({
       success:    true,

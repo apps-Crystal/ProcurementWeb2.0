@@ -1,202 +1,92 @@
 /**
- * POST /api/match
- *
- * Runs the Three-Way Match: PO vs GRN vs Invoice.
- * Called automatically after Site Head approves GRN and invoice is uploaded.
- *
- * Body: { po_id, grn_id, inv_id, triggered_by }
- *
- * Match outcomes (per SOP §8.4):
- *   MATCHED          → payment entry auto-created (SUBMITTED)
- *   QUANTITY_VARIANCE → payment created for accepted qty; difference held
- *   PRICE_VARIANCE   → payment HELD; Debit Note option raised
- *   FRAUD_RISK       → payment HELD; management alerted (AI confidence < 70)
- *   NO_GRN           → payment BLOCKED
- *
- * GET /api/match?match_id=MCH-xxx  → returns match details
+ * GET  /api/match             — list all match records
+ * GET  /api/match?match_id=   — fetch single match with full document context
+ * POST /api/match             — run a three-way match (delegates to matchEngine)
+ * PATCH /api/match            — resolve a match (Debit Note / Accept Variance / Reject)
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import {
-  readSheet,
-  appendRowByFields,
-  updateRowWhere,
-  getNextSeq,
-  generateId,
-  writeAuditLog,
-} from "@/lib/sheets";
-
-// ─────────────────────────────────────────────────────────────────────────────
-// TYPES
-// ─────────────────────────────────────────────────────────────────────────────
-
-type MatchStatus =
-  | "MATCHED"
-  | "QUANTITY_VARIANCE"
-  | "PRICE_VARIANCE"
-  | "FRAUD_RISK"
-  | "NO_GRN"
-  | "NO_INVOICE";
-
-interface MatchLineResult {
-  po_line_id: string;
-  description: string;
-  po_qty: number;
-  grn_accepted_qty: number;
-  invoice_qty: number;
-  po_rate: number;
-  invoice_rate: number;
-  qty_variance_pct: number;
-  price_variance_pct: number;
-  line_status: MatchStatus;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// GET — fetch match result
-// ─────────────────────────────────────────────────────────────────────────────
+import { readSheet, updateRowWhere, writeAuditLog } from "@/lib/sheets";
+import { runThreeWayMatch } from "@/lib/matchEngine";
 
 export async function GET(req: NextRequest) {
   const matchId = req.nextUrl.searchParams.get("match_id");
+  const invId   = req.nextUrl.searchParams.get("inv_id");
+
+  const matches = await readSheet("THREE_WAY_MATCH");
+
+  // Lookup by invoice ID — returns the most recent match for that invoice
+  if (invId) {
+    const match = matches.filter((m) => m.INVOICE_ID === invId).at(-1) ?? null;
+    return NextResponse.json({ match });
+  }
 
   if (!matchId) {
-    // Return all matches pending resolution
-    const matches = await readSheet("THREE_WAY_MATCH");
     return NextResponse.json({ matches });
   }
 
-  const matches = await readSheet("THREE_WAY_MATCH");
-  const match = matches.find((m) => m.MATCH_ID === matchId);
+  const match   = matches.find((m) => m.MATCH_ID === matchId);
   if (!match) {
     return NextResponse.json({ error: "Match not found" }, { status: 404 });
   }
 
-  const lines = await readSheet("THREE_WAY_MATCH_LINES");
-  const matchLines = lines.filter((l) => l.MATCH_ID === matchId);
+  // Fetch full document context in parallel
+  const [matchLineRows, poRows, poLineRows, grnRows, grnLineRows, invoiceRows] = await Promise.all([
+    readSheet("THREE_WAY_MATCH_LINES"),
+    readSheet("PO"),
+    readSheet("PO_LINES"),
+    readSheet("GRN"),
+    readSheet("GRN_LINES"),
+    readSheet("INVOICES"),
+  ]);
 
-  return NextResponse.json({ match, lines: matchLines });
+  const lines    = matchLineRows.filter((l) => l.MATCH_ID === matchId);
+  const po       = poRows.find((r) => r.PO_ID === match.PO_ID)        ?? null;
+  const poLines  = poLineRows.filter((l) => l.PO_ID === match.PO_ID);
+  const grn      = grnRows.find((r) => r.GRN_ID === match.GRN_ID)     ?? null;
+  const grnLines = grnLineRows.filter((l) => l.GRN_ID === match.GRN_ID);
+  const invoice  = invoiceRows.find((i) => i.INV_ID === match.INVOICE_ID) ?? null;
+
+  return NextResponse.json({ match, lines, po, poLines, grn, grnLines, invoice });
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// POST — run the match
-// ─────────────────────────────────────────────────────────────────────────────
 
 export async function POST(req: NextRequest) {
   try {
-    const { po_id, grn_id, inv_id, triggered_by } = await req.json();
+    // BUG-MATCH-001: Read caller identity from JWT headers
+    const callerId   = req.headers.get("x-user-id")  ?? "";
+    const callerRole = req.headers.get("x-user-role") ?? "";
+
+    if (!callerId) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    const MATCH_ALLOWED_ROLES = ["Procurement_Team", "System_Admin"];
+    if (!MATCH_ALLOWED_ROLES.includes(callerRole)) {
+      return NextResponse.json(
+        { error: "Forbidden: only Procurement_Team or System_Admin may trigger three-way matching (SOP §9.1)." },
+        { status: 403 }
+      );
+    }
+
+    const { po_id, grn_id, inv_id } = await req.json();
 
     if (!po_id || !inv_id) {
-      return NextResponse.json({ error: "po_id and inv_id are required" }, { status: 400 });
-    }
-
-    // ── Load source data ──────────────────────────────────────────────────────
-
-    // No GRN check
-    if (!grn_id) {
-      return NextResponse.json({
-        match_status: "NO_GRN",
-        message: "No GRN found for this PO. Payment blocked until GRN is raised and approved.",
-      }, { status: 200 });
-    }
-
-    const [poLines, grnLines, invoiceLines, invoices] = await Promise.all([
-      readSheet("PO_LINES"),
-      readSheet("GRN_LINES"),
-      readSheet("INVOICE_LINES"),
-      readSheet("INVOICES"),
-    ]);
-
-    const myPoLines = poLines.filter((l) => l.PO_ID === po_id);
-    const myGrnLines = grnLines.filter((l) => l.GRN_ID === grn_id);
-    const myInvLines = invoiceLines.filter((l) => l.INV_ID === inv_id);
-    const invoice = invoices.find((i) => i.INV_ID === inv_id);
-
-    if (!invoice) {
-      return NextResponse.json({ error: "Invoice not found" }, { status: 404 });
-    }
-
-    // ── Fraud risk check (AI confidence) ─────────────────────────────────────
-    const confidenceScore = parseFloat(invoice.AI_CONFIDENCE_SCORE ?? "100");
-    if (confidenceScore < 70) {
-      await flagMatchResult(po_id, grn_id, inv_id, "FRAUD_RISK", [], triggered_by);
-      return NextResponse.json({
-        match_status: "FRAUD_RISK",
-        message: `AI confidence score is ${confidenceScore}%. Invoice flagged for management review before payment.`,
-        confidence_score: confidenceScore,
-      });
-    }
-
-    // ── Line-level matching ───────────────────────────────────────────────────
-    const lineResults: MatchLineResult[] = [];
-    let overallStatus: MatchStatus = "MATCHED";
-
-    for (const poLine of myPoLines) {
-      const grnLine = myGrnLines.find(
-        (g) => g.PO_LINE_REF === poLine.LINE_ID
+      return NextResponse.json(
+        { error: "po_id and inv_id are required" },
+        { status: 400 }
       );
-      const invLine = myInvLines.find(
-        (i) => i.DESCRIPTION?.toLowerCase() === poLine.ITEM_DESCRIPTION?.toLowerCase()
-      );
-
-      const poQty = parseFloat(poLine.QTY ?? "0");
-      const grnAccepted = parseFloat(grnLine?.QTY_ACCEPTED ?? "0");
-      const invQty = parseFloat(invLine?.QTY ?? "0");
-      const poRate = parseFloat(poLine.RATE ?? "0");
-      const invRate = parseFloat(invLine?.RATE ?? "0");
-
-      const qtyVariancePct =
-        grnAccepted > 0 ? Math.abs((invQty - grnAccepted) / grnAccepted) * 100 : 0;
-      const priceVariancePct =
-        poRate > 0 ? Math.abs((invRate - poRate) / poRate) * 100 : 0;
-
-      let lineStatus: MatchStatus = "MATCHED";
-
-      if (priceVariancePct > 0.5) {
-        lineStatus = "PRICE_VARIANCE";
-        overallStatus = "PRICE_VARIANCE";
-      } else if (invQty > grnAccepted) {
-        lineStatus = "QUANTITY_VARIANCE";
-        if (overallStatus === "MATCHED") overallStatus = "QUANTITY_VARIANCE";
-      }
-
-      lineResults.push({
-        po_line_id: poLine.LINE_ID,
-        description: poLine.ITEM_DESCRIPTION,
-        po_qty: poQty,
-        grn_accepted_qty: grnAccepted,
-        invoice_qty: invQty,
-        po_rate: poRate,
-        invoice_rate: invRate,
-        qty_variance_pct: Math.round(qtyVariancePct * 100) / 100,
-        price_variance_pct: Math.round(priceVariancePct * 100) / 100,
-        line_status: lineStatus,
-      });
     }
 
-    // ── Write match result to sheets ─────────────────────────────────────────
-    const matchId = await flagMatchResult(po_id, grn_id, inv_id, overallStatus, lineResults, triggered_by);
-
-    // ── Auto-create payment entry if full match ───────────────────────────────
-    let paymentId: string | null = null;
-    if (overallStatus === "MATCHED") {
-      paymentId = await createPaymentEntry(po_id, grn_id, inv_id, invoice, triggered_by);
-      // Update invoice status
-      await updateRowWhere("INVOICES", "INV_ID", inv_id, { STATUS: "MATCHED" });
-    } else {
-      // Payment is held
-      await updateRowWhere("INVOICES", "INV_ID", inv_id, { STATUS: "EXCEPTION" });
-    }
-
-    await writeAuditLog({ userId: triggered_by ?? "SYSTEM", module: "THREE_WAY_MATCH", recordId: matchId, action: "THREE_WAY_MATCH", remarks: `Status: ${overallStatus}` });
-
-    return NextResponse.json({
-      match_id: matchId,
-      match_status: overallStatus as MatchStatus,
-      line_results: lineResults,
-      payment_id: paymentId,
-      message: getMatchMessage(overallStatus),
+    const result = await runThreeWayMatch({
+      po_id,
+      grn_id:       grn_id || undefined,
+      inv_id,
+      triggered_by: callerId,
     });
+
+    return NextResponse.json(result);
   } catch (err) {
-    console.error("[match]", err);
+    console.error("[match POST]", err);
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Internal server error" },
       { status: 500 }
@@ -204,120 +94,118 @@ export async function POST(req: NextRequest) {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// HELPERS
-// ─────────────────────────────────────────────────────────────────────────────
+export async function PATCH(req: NextRequest) {
+  try {
+    // BUG-MATCH-002: Read caller identity from JWT headers
+    const callerId   = req.headers.get("x-user-id")  ?? "";
+    const callerRole = req.headers.get("x-user-role") ?? "";
 
-async function flagMatchResult(
-  poId: string,
-  grnId: string,
-  invId: string,
-  status: MatchStatus,
-  lines: MatchLineResult[],
-  triggeredBy: string
-): Promise<string> {
-  const seq = await getNextSeq("THREE_WAY_MATCH");
-  const matchId = generateId("MCH", seq);
-  const now = new Date().toISOString();
+    if (!callerId) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
 
-  // Aggregate variances
-  const maxQtyVar = lines.reduce((m, l) => Math.max(m, l.qty_variance_pct), 0);
-  const maxPriceVar = lines.reduce((m, l) => Math.max(m, l.price_variance_pct), 0);
+    const RESOLVE_ALLOWED_ROLES = ["Accounts", "System_Admin"];
+    if (!RESOLVE_ALLOWED_ROLES.includes(callerRole)) {
+      return NextResponse.json(
+        { error: "Forbidden: only Accounts or System_Admin may resolve match discrepancies (SOP §9.3)." },
+        { status: 403 }
+      );
+    }
 
-  await appendRowByFields("THREE_WAY_MATCH", {
-    MATCH_ID:              matchId,
-    PO_ID:                 poId,
-    GRN_ID:                grnId,
-    INV_ID:                invId,
-    MATCH_STATUS:          status,
-    MAX_QTY_VARIANCE_PCT:  maxQtyVar,
-    MAX_PRICE_VARIANCE_PCT: maxPriceVar,
-    VARIANCE_REASON:       "",
-    RESOLUTION_TYPE:       "",
-    TRIGGERED_BY:          triggeredBy,
-    CREATED_AT:            now,
-  });
+    const { match_id, resolution } = await req.json();
 
-  // Write line results
-  for (const line of lines) {
-    const lineSeq = await getNextSeq("THREE_WAY_MATCH_LINES");
-    await appendRowByFields("THREE_WAY_MATCH_LINES", {
-      MATCH_LINE_ID:      generateId("MCHL", lineSeq),
-      MATCH_ID:           matchId,
-      PO_LINE_ID:         line.po_line_id,
-      DESCRIPTION:        line.description,
-      PO_QTY:             line.po_qty,
-      GRN_ACCEPTED_QTY:   line.grn_accepted_qty,
-      INVOICE_QTY:        line.invoice_qty,
-      PO_RATE:            line.po_rate,
-      INVOICE_RATE:       line.invoice_rate,
-      QTY_VARIANCE_PCT:   line.qty_variance_pct,
-      PRICE_VARIANCE_PCT: line.price_variance_pct,
-      LINE_STATUS:        line.line_status,
+    if (!match_id || !resolution) {
+      return NextResponse.json(
+        { error: "match_id and resolution are required" },
+        { status: 400 }
+      );
+    }
+
+    const validResolutions = ["DEBIT_NOTE", "ACCEPT_VARIANCE", "REJECT"];
+    if (!validResolutions.includes(resolution)) {
+      return NextResponse.json(
+        { error: `resolution must be one of: ${validResolutions.join(", ")}` },
+        { status: 400 }
+      );
+    }
+
+    const now = new Date().toISOString();
+
+    // Find the match record
+    const matches = await readSheet("THREE_WAY_MATCH");
+    const match   = matches.find((m) => m.MATCH_ID === match_id);
+    if (!match) {
+      return NextResponse.json({ error: "Match not found" }, { status: 404 });
+    }
+
+    // BUG-MATCH-003: Guard against re-resolution of terminal-status matches
+    const TERMINAL_MATCH_STATUSES = ["ACCEPTED", "REJECTED", "ESCALATED", "PAID"];
+    if (TERMINAL_MATCH_STATUSES.includes(match.STATUS)) {
+      return NextResponse.json(
+        { error: `Match ${match_id} is already in status '${match.STATUS}' and cannot be re-resolved.` },
+        { status: 422 }
+      );
+    }
+
+    // Mark the match as resolved
+    await updateRowWhere("THREE_WAY_MATCH", "MATCH_ID", match_id, {
+      RESOLUTION_STATUS: resolution,
+      MATCH_RESULT:      "MATCHED", // resolved = treated as matched for payment
+      REVIEWED_BY:       callerId,
+      REVIEW_DATE:       now,
     });
+
+    // Find linked payment and act on it
+    const payments = await readSheet("PAYMENTS");
+    const payment  = payments.find(
+      (p) => p.INVOICE_ID === match.INVOICE_ID && (p.STATUS === "HELD" || p.STATUS === "SUBMITTED")
+    );
+
+    if (payment) {
+      if (resolution === "DEBIT_NOTE") {
+        // Pay only at original PO value
+        const poRows  = await readSheet("PO");
+        const po      = poRows.find((r) => r.PO_ID === match.PO_ID);
+        const poTotal = po?.GRAND_TOTAL ?? po?.TOTAL_AMOUNT_WITH_GST ?? payment.GROSS_AMOUNT ?? "0";
+        await updateRowWhere("PAYMENTS", "PAYMENT_ID", payment.PAYMENT_ID, {
+          NET_PAYABLE:       poTotal,
+          STATUS:            "SUBMITTED",
+          LAST_UPDATED_BY:   callerId,
+          LAST_UPDATED_DATE: now,
+        });
+      } else if (resolution === "ACCEPT_VARIANCE") {
+        // Pay at invoice amount
+        await updateRowWhere("PAYMENTS", "PAYMENT_ID", payment.PAYMENT_ID, {
+          STATUS:            "SUBMITTED",
+          LAST_UPDATED_BY:   callerId,
+          LAST_UPDATED_DATE: now,
+        });
+      } else if (resolution === "REJECT") {
+        await updateRowWhere("PAYMENTS", "PAYMENT_ID", payment.PAYMENT_ID, {
+          STATUS:            "REJECTED",
+          LAST_UPDATED_BY:   callerId,
+          LAST_UPDATED_DATE: now,
+        });
+        await updateRowWhere("INVOICES", "INV_ID", match.INVOICE_ID, {
+          STATUS: "EXCEPTION",
+        });
+      }
+    }
+
+    await writeAuditLog({
+      userId:   callerId,
+      module:   "THREE_WAY_MATCH",
+      recordId: match_id,
+      action:   `MATCH_RESOLVED`,
+      remarks:  `Resolution: ${resolution}`,
+    });
+
+    return NextResponse.json({ success: true, match_id, resolution });
+  } catch (err) {
+    console.error("[match PATCH]", err);
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "Internal server error" },
+      { status: 500 }
+    );
   }
-
-  return matchId;
-}
-
-async function createPaymentEntry(
-  poId: string,
-  grnId: string,
-  invId: string,
-  invoice: Record<string, string>,
-  triggeredBy: string
-): Promise<string> {
-  const seq = await getNextSeq("PAYMENTS");
-  const payId = generateId("PAY", seq);
-  const now = new Date().toISOString();
-
-  // Due date = invoice verification date + 30 days (standard terms)
-  const dueDate = new Date();
-  dueDate.setDate(dueDate.getDate() + 30);
-
-  await appendRowByFields("PAYMENTS", {
-    PAY_ID:               payId,
-    INV_ID:               invId,
-    PO_ID:                poId,
-    GRN_ID:               grnId,
-    VENDOR_ID:            invoice.VENDOR_ID ?? "",
-    VENDOR_NAME:          invoice.VENDOR_NAME ?? "",
-    GROSS_AMOUNT:         invoice.TOTAL_PAYABLE ?? "0",
-    ADVANCE_ALREADY_PAID: "0",
-    CREDIT_NOTES_APPLIED: "0",
-    DEBIT_NOTES_APPLIED:  "0",
-    TDS_AMOUNT:           "0",
-    NET_PAYABLE:          invoice.TOTAL_PAYABLE ?? "0",
-    PAYMENT_TYPE:         "Invoice",
-    PAYMENT_DUE_DATE:     dueDate.toISOString().slice(0, 10),
-    IS_MSME:              invoice.IS_MSME === "Y" ? "Y" : "N",
-    STATUS:               "SUBMITTED",
-    CREATED_BY:           triggeredBy ?? "SYSTEM",
-    CREATED_AT:           now,
-  });
-
-  const stageSeq = await getNextSeq("PAYMENT_STAGES");
-  await appendRowByFields("PAYMENT_STAGES", {
-    STAGE_ID:     generateId("STGE", stageSeq),
-    PAY_ID:       payId,
-    STAGE_NUMBER: "1",
-    STAGE_STATUS: "SUBMITTED",
-    ACTIONED_BY:  triggeredBy ?? "SYSTEM",
-    ACTIONED_AT:  now,
-    REMARKS:      "Auto-created from full three-way match",
-  });
-
-  return payId;
-}
-
-function getMatchMessage(status: MatchStatus): string {
-  const messages: Record<MatchStatus, string> = {
-    MATCHED: "Full match. Payment entry created and sent to Procurement for verification.",
-    QUANTITY_VARIANCE: "Quantity shortfall detected. Payment created for accepted quantity only. Balance held pending delivery.",
-    PRICE_VARIANCE: "Price variance detected. Payment held. Accounts and Procurement to review. Debit Note option available.",
-    FRAUD_RISK: "Low AI confidence score. Invoice flagged. Management review required before any payment is released.",
-    NO_GRN: "No GRN on file for this PO. Payment blocked until GRN is raised and approved.",
-    NO_INVOICE: "No invoice uploaded. Cannot run match.",
-  };
-  return messages[status];
 }

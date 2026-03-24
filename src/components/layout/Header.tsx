@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Bell, Search, Menu, LogOut, ChevronDown, User, ShieldAlert } from "lucide-react";
+import { Bell, Search, Menu, LogOut, ChevronDown, User, ShieldAlert, RefreshCw } from "lucide-react";
 import { useCurrentUser } from "@/components/auth/AuthProvider";
 
 export function Header() {
@@ -10,6 +10,37 @@ export function Header() {
   const router   = useRouter();
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [loggingOut, setLoggingOut]     = useState(false);
+  const [refreshing, setRefreshing]     = useState(false);
+
+  const [searchQuery,   setSearchQuery]   = useState("");
+  const [searchResults, setSearchResults] = useState<{ id: string; label: string; sublabel: string; type: string; href: string }[]>([]);
+  const [searchOpen,    setSearchOpen]    = useState(false);
+  const [searchLoading, setSearchLoading] = useState(false);
+
+  async function handleSearch(val: string) {
+    setSearchQuery(val);
+    if (val.trim().length < 2) { setSearchResults([]); setSearchOpen(false); return; }
+    setSearchLoading(true);
+    try {
+      const res  = await fetch(`/api/search?q=${encodeURIComponent(val)}&limit=10`);
+      const data = await res.json();
+      setSearchResults(data.results ?? []);
+      setSearchOpen(true);
+    } catch {
+      setSearchResults([]);
+    } finally {
+      setSearchLoading(false);
+    }
+  }
+
+  function handleSearchKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Escape") { setSearchOpen(false); setSearchQuery(""); }
+    if (e.key === "Enter" && searchResults.length > 0) {
+      router.push(searchResults[0].href);
+      setSearchOpen(false);
+      setSearchQuery("");
+    }
+  }
 
   async function handleLogout() {
     setLoggingOut(true);
@@ -42,14 +73,59 @@ export function Header() {
             <Search className="absolute left-2.5 h-4 w-4 text-text-secondary" />
             <input
               type="text"
+              value={searchQuery}
+              onChange={(e) => handleSearch(e.target.value)}
+              onKeyDown={handleSearchKeyDown}
+              onFocus={() => searchResults.length > 0 && setSearchOpen(true)}
+              onBlur={() => setTimeout(() => setSearchOpen(false), 150)}
               placeholder="Search POs, Invoices, PRs..."
-              className="peer h-8 w-full rounded-sm border border-border bg-background pl-9 pr-4 text-sm shadow-sm transition-colors focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+              className="peer h-8 w-full rounded-sm border border-border bg-background pl-9 pr-14 text-sm shadow-sm transition-colors focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
             />
+            {searchLoading && (
+              <div className="absolute right-10 text-[10px] text-text-secondary animate-pulse">…</div>
+            )}
             <div className="absolute right-2 flex items-center pointer-events-none text-[10px] text-text-secondary font-mono border border-border px-1 rounded-sm bg-surface">
               Ctrl K
             </div>
           </div>
+
+          {/* Dropdown results */}
+          {searchOpen && searchResults.length > 0 && (
+            <div className="absolute top-full left-0 mt-1 w-full bg-surface border border-border rounded-sm shadow-lg z-50 py-1 max-h-72 overflow-y-auto">
+              {searchResults.map((r) => (
+                <button
+                  key={r.id}
+                  onMouseDown={() => { router.push(r.href); setSearchOpen(false); setSearchQuery(""); }}
+                  className="w-full text-left px-3 py-2 hover:bg-primary-50 flex flex-col gap-0.5 border-b border-border last:border-0"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded-sm bg-primary-100 text-primary-700 shrink-0">{r.type}</span>
+                    <span className="text-xs font-semibold text-text-primary truncate">{r.label}</span>
+                  </div>
+                  <span className="text-[11px] text-text-secondary pl-7 truncate">{r.sublabel}</span>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {searchOpen && searchQuery.length >= 2 && searchResults.length === 0 && !searchLoading && (
+            <div className="absolute top-full left-0 mt-1 w-full bg-surface border border-border rounded-sm shadow-lg z-50 py-3 text-center text-xs text-text-secondary">
+              No results found for &quot;{searchQuery}&quot;
+            </div>
+          )}
         </div>
+
+        <button
+          onClick={() => {
+            setRefreshing(true);
+            window.location.reload();
+          }}
+          disabled={refreshing}
+          title="Refresh page data"
+          className="text-text-secondary hover:text-text-primary transition-colors disabled:opacity-50"
+        >
+          <RefreshCw className={`h-5 w-5 ${refreshing ? "animate-spin" : ""}`} />
+        </button>
 
         <button className="relative text-text-secondary hover:text-text-primary transition-colors">
           <Bell className="h-5 w-5" />

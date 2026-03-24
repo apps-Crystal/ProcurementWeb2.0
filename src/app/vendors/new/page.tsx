@@ -297,7 +297,7 @@ export default function VendorRegistration() {
                 </div>
               )}
               <div>
-                <label className="block text-xs font-bold text-primary-900 mb-1">TDS Category <span className="text-danger">*</span></label>
+                <label className="block text-xs font-bold text-primary-900 mb-1">TDS Category <span className="text-text-secondary font-normal">(optional)</span></label>
                 <select className="enterprise-input" value={tdsCategory} onChange={(e) => setTdsCategory(e.target.value)}>
                   {opts(dropdowns, "TDS_CATEGORY", [
                     { value: "Not Applicable", label: "Not Applicable" },
@@ -468,9 +468,6 @@ export default function VendorRegistration() {
               <h2 className="text-sm font-bold text-primary-900 uppercase tracking-wide">Mandatory Documents</h2>
             </div>
             <div className="p-5 space-y-4">
-              <p className="text-xs text-text-secondary">
-                Uploaded to Google Drive at <span className="font-mono text-primary-700">ROOT/VENDORS/&lt;VEN_ID&gt;/</span>
-              </p>
               {DOC_SLOTS.map((slot) => {
                 const file = docs[slot.key];
                 return (

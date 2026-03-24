@@ -51,7 +51,9 @@ export async function POST(req: NextRequest) {
       retention_amount = 0,
       lines = [],
       draft = false,
-      ai_extracted = false,
+      ai_extracted = "N",
+      payment_schedule_type = "",
+      amc_billing_frequency = "",
     } = body;
 
     if (!requestor_user_id) {
@@ -64,6 +66,81 @@ export async function POST(req: NextRequest) {
     if (!draft && (!category || !lines.length)) {
       return NextResponse.json(
         { error: "requestor_user_id, category, and at least one line are required" },
+        { status: 400 }
+      );
+    }
+
+    // ── BUG-5: Validate requestor exists; auto-populate name/site from USERS ──
+    const allUsers = await readSheet("USERS");
+    const validUser = allUsers.find((u: any) => u.USER_ID === requestor_user_id);
+    if (!validUser) {
+      return NextResponse.json(
+        { error: `requestor_user_id "${requestor_user_id}" does not match any registered user` },
+        { status: 400 }
+      );
+    }
+    const safeRequestorName = validUser.FULL_NAME || requestor_name || "";
+    const safeRequestorSite = validUser.SITE      || requestor_site || "";
+
+    // ── BUG-6: Sanitize all free-text inputs ────────────────────────────────
+    const sanitize = (s: unknown): string =>
+      String(s ?? "")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#x27;");
+
+    const safePurpose          = sanitize(purpose);
+    const safeCategory         = sanitize(category);
+    const safeDeliveryLocation = sanitize(delivery_location);
+    const safeVendorName       = sanitize(preferred_vendor_name);
+
+    // ── BUG-1/2/3/4/7/8/9: Validate line items (applies to drafts too) ──────
+    const VALID_GST    = [0, 5, 12, 18, 28];
+    const MAX_QTY      = 1_000_000;
+    const MAX_RATE     = 100_000_000;
+    const MAX_LINE_TOT = 1_000_000_000;
+    const lineErrors: string[] = [];
+
+    for (const [i, line] of (lines as any[]).entries()) {
+      const ln   = i + 1;
+      const qty  = Number(line.qty);
+      const rate = Number(line.rate);
+      const gst  = Number(line.gst_percent);
+      const desc = String(line.item_description ?? "").trim();
+      const hsn  = String(line.hsn_code ?? "").trim();
+
+      if (!Number.isFinite(qty) || qty <= 0)
+        lineErrors.push(`Line ${ln}: quantity must be a positive number (got "${line.qty}")`);
+      else if (qty > MAX_QTY)
+        lineErrors.push(`Line ${ln}: quantity exceeds maximum of ${MAX_QTY.toLocaleString("en-IN")}`);
+
+      if (!Number.isFinite(rate) || rate <= 0)
+        lineErrors.push(`Line ${ln}: rate must be a positive number (got "${line.rate}")`);
+      else if (rate > MAX_RATE)
+        lineErrors.push(`Line ${ln}: rate exceeds maximum of ₹${MAX_RATE.toLocaleString("en-IN")}`);
+
+      if (Number.isFinite(qty) && Number.isFinite(rate) && qty * rate > MAX_LINE_TOT)
+        lineErrors.push(`Line ${ln}: line total ₹${(qty * rate).toLocaleString("en-IN")} exceeds ₹100 crore limit`);
+
+      if (!VALID_GST.includes(gst))
+        lineErrors.push(`Line ${ln}: GST must be 0%, 5%, 12%, 18%, or 28% (got ${line.gst_percent}%)`);
+
+      if (desc.length < 3)
+        lineErrors.push(`Line ${ln}: item description is required (minimum 3 characters)`);
+
+      if (!hsn || !/^\d{4,8}$/.test(hsn))
+        lineErrors.push(`Line ${ln}: HSN/SAC code is required (4–8 digit number)`);
+
+      // Sanitize text fields in-place
+      line.item_description = sanitize(desc);
+      line.item_purpose     = sanitize(line.item_purpose ?? "");
+      line.remarks          = sanitize(line.remarks ?? "");
+    }
+
+    if (lineErrors.length > 0) {
+      return NextResponse.json(
+        { error: "Validation failed", details: lineErrors },
         { status: 400 }
       );
     }
@@ -89,8 +166,12 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: `Supporting document exceeds 5 MB limit (${(supportingFile.size / 1024 / 1024).toFixed(1)} MB).` }, { status: 400 });
 
     // Generate PR ID first — needed for Drive folder name
-    const seq = await getNextSeq("MPR");
-    const prId = generateId("PR", seq);
+    let seq = await getNextSeq("MPR");
+    let prId = generateId("PR", seq);
+    const existingMPR = await readSheet("MPR");
+    if (existingMPR.some((r: any) => r.PR_ID === prId)) {
+      prId = generateId("PR", await getNextSeq("MPR"));
+    }
     const now = new Date().toISOString();
 
     // ── Upload files to Drive: ROOT/PR/<PR_ID>/ ──────────────────────────────
@@ -124,27 +205,34 @@ export async function POST(req: NextRequest) {
     );
     const totalWithGst = totalBeforeGst + totalGst;
 
+    // BUG-MPR-001: Compute header-level price deviation flag from all lines
+    const headerDeviationFlag = (lines as any[]).some((l: any) => {
+      const lastPrice = parseFloat(l.last_purchase_price) || 0;
+      const lRate     = parseFloat(l.rate) || 0;
+      return lastPrice > 0 && lRate > lastPrice * 1.15;
+    }) ? "Y" : "N";
+
     // ── Write MPR header to Sheets ────────────────────────────────────────────
     await appendRowByFields("MPR", {
       PR_ID:                    prId,
       PR_DATE:                  now.slice(0, 10),
       PR_VERSION:               "1",
       REQUESTOR_USER_ID:        requestor_user_id,
-      REQUESTOR_NAME:           requestor_name,
-      REQUESTOR_SITE:           requestor_site,
-      CATEGORY:                 category,
-      PURPOSE:                  purpose,
+      REQUESTOR_NAME:           safeRequestorName,
+      REQUESTOR_SITE:           safeRequestorSite,
+      CATEGORY:                 safeCategory,
+      PURPOSE:                  safePurpose,
       PROCUREMENT_TYPE:         procurement_type,
-      DELIVERY_LOCATION:        delivery_location,
+      DELIVERY_LOCATION:        safeDeliveryLocation,
       EXPECTED_DELIVERY_DATE:   expected_delivery_date,
       PREFERRED_VENDOR_ID:      preferred_vendor_id,
-      PREFERRED_VENDOR_NAME:    preferred_vendor_name,
+      PREFERRED_VENDOR_NAME:    safeVendorName,
       PAYMENT_TERMS:            payment_terms,
       ADVANCE_PERCENT:          advance_percent,
       CREDIT_PERIOD_DAYS:       credit_period_days,
       RETENTION_AMOUNT:         retention_amount,
-      PAYMENT_SCHEDULE_TYPE:    "",
-      AMC_BILLING_FREQUENCY:    "",
+      PAYMENT_SCHEDULE_TYPE:    payment_schedule_type,
+      AMC_BILLING_FREQUENCY:    amc_billing_frequency,
       PAYMENT_LINKED_TO_MILESTONE: "",
       LATE_DELIVERY_LD_PCT:     "",
       LATE_DELIVERY_LD_MAX_PCT: "",
@@ -155,11 +243,11 @@ export async function POST(req: NextRequest) {
       QUOTATION_URL:            quotationUrl,
       PROFORMA_INVOICE_URL:     proformaUrl,
       SUPPORTING_DOC_URL:       supportingUrl,
-      AI_EXTRACTED:             ai_extracted ? "Y" : "N",
+      AI_EXTRACTED:             typeof ai_extracted === "boolean" ? (ai_extracted ? "Y" : "N") : (ai_extracted || "N"),
       TOTAL_AMOUNT_BEFORE_GST:  totalBeforeGst,
       TOTAL_GST_AMOUNT:         totalGst,
       TOTAL_AMOUNT_WITH_GST:    totalWithGst,
-      PRICE_DEVIATION_FLAG:     "N",
+      PRICE_DEVIATION_FLAG:     headerDeviationFlag,
       STATUS:                   draft ? "DRAFT" : "SUBMITTED",
       ASSIGNED_APPROVER_ID:     "",
       ASSIGNED_APPROVER_NAME:   "",
@@ -207,6 +295,7 @@ export async function POST(req: NextRequest) {
         LAST_PURCHASE_PRICE:    lastPrice,
         PRICE_DEVIATION_PCT:    deviationPct,
         PRICE_DEVIATION_FLAG:   deviationFlag,
+        AI_OVERRIDDEN:          line.ai_overridden ?? "",
         REMARKS:                "",
       });
     }

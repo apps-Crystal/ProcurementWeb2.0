@@ -75,7 +75,7 @@ export default function Dashboard() {
 
         // KPIs
         const openPOs   = allPOs.filter((p: any) => ["ISSUED", "ACKNOWLEDGED", "ACCEPTED"].includes(p.STATUS));
-        const openPOVal = openPOs.reduce((s: number, p: any) => s + parseFloat(p.TOTAL_VALUE ?? "0"), 0);
+        const openPOVal = openPOs.reduce((s: number, p: any) => s + (parseFloat(String(p.GRAND_TOTAL ?? "").replace(/,/g, "")) || 0), 0);
         const openFlags = allFlags.filter((f: any) => f.STATUS === "OPEN").length;
         const msmeWarn  = allFlags.filter((f: any) => f.TYPE === "Vendor Compliance" && f.STATUS === "OPEN").length;
 
@@ -100,15 +100,15 @@ export default function Dashboard() {
 
         // Three-way match exceptions
         const excRows: MatchException[] = allMatches
-          .filter((m: any) => m.MATCH_STATUS && m.MATCH_STATUS !== "MATCHED")
+          .filter((m: any) => m.MATCH_RESULT && m.MATCH_RESULT !== "MATCHED")
           .slice(0, 5)
           .map((m: any) => ({
-            match_id:            m.MATCH_ID ?? "—",
-            po_id:               m.PO_ID    ?? "—",
-            inv_id:              m.INV_ID   ?? "—",
-            status:              m.MATCH_STATUS,
-            max_price_variance:  m.MAX_PRICE_VARIANCE_PCT ?? "0",
-            max_qty_variance:    m.MAX_QTY_VARIANCE_PCT   ?? "0",
+            match_id:            m.MATCH_ID         ?? "—",
+            po_id:               m.PO_ID            ?? "—",
+            inv_id:              m.INVOICE_ID       ?? "—",
+            status:              m.MATCH_RESULT,
+            max_price_variance:  m.RATE_VARIANCE_PCT ?? "0",
+            max_qty_variance:    m.QTY_VARIANCE      ?? "0",
           }));
         setExceptions(excRows);
       } catch (e) {

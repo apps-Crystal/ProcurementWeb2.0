@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, notFound } from "next/navigation";
 import {
   FileText,
   Briefcase,
@@ -21,7 +21,7 @@ import {
 import { useCurrentUser } from "@/components/auth/AuthProvider";
 import { fmtDate } from "@/lib/utils";
 
-type PRStatus = "SUBMITTED" | "APPROVED" | "REJECTED" | "DRAFT" | "CANCELLED" | "PO_CREATED";
+type PRStatus = "SUBMITTED" | "APPROVED" | "REJECTED" | "REVISION_REQUESTED" | "DRAFT" | "CANCELLED" | "PO_CREATED";
 
 interface PRData {
   PR_ID?: string;
@@ -52,8 +52,10 @@ interface PRData {
   QUOTATION_URL?: string;
   PROFORMA_URL?: string;
   SUPPORTING_DOC_URL?: string;
+  AI_EXTRACTED?: string;
   STATUS?: string;
   APPROVER_REMARKS?: string;
+  REJECTION_REMARKS?: string;
   ASSIGNED_APPROVER_NAME?: string;
   APPROVER_ACTION_DATE?: string;
 }
@@ -72,14 +74,16 @@ interface PRLine {
   LINE_TOTAL?: string;
   LINE_AMOUNT_BEFORE_GST?: string;
   GST_AMOUNT?: string;
+  AI_OVERRIDDEN?: string;
 }
 
 const STATUS_BADGE: Record<string, string> = {
-  SUBMITTED:  "bg-primary-50 text-primary-700 border-primary-200",
-  APPROVED:   "bg-success/10 text-success border-success/20",
-  REJECTED:   "bg-danger/10 text-danger border-danger/20",
-  DRAFT:      "bg-warning/10 text-warning-800 border-warning/20",
-  PO_CREATED: "bg-accent-50 text-accent-700 border-accent-200",
+  SUBMITTED:          "bg-primary-50 text-primary-700 border-primary-200",
+  APPROVED:           "bg-success/10 text-success border-success/20",
+  REJECTED:           "bg-danger/10 text-danger border-danger/20",
+  REVISION_REQUESTED: "bg-amber-50 text-amber-800 border-amber-300",
+  DRAFT:              "bg-warning/10 text-warning-800 border-warning/20",
+  PO_CREATED:         "bg-accent-50 text-accent-700 border-accent-200",
 };
 
 export default function PRDetailPage() {
@@ -92,7 +96,7 @@ export default function PRDetailPage() {
   const [prType, setPrType] = useState<"MPR" | "SPR">("MPR");
   const [loading, setLoading] = useState(true);
 
-  const [action, setAction] = useState<"APPROVED" | "REJECTED" | null>(null);
+  const [action, setAction] = useState<"APPROVED" | "REJECTED" | "SEND_BACK" | null>(null);
   const [remarks, setRemarks] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [actionError, setActionError] = useState("");
@@ -103,8 +107,9 @@ export default function PRDetailPage() {
 
   useEffect(() => {
     fetch(`/api/pr/${id}`)
-      .then((r) => r.json())
+      .then((r) => { if (r.status === 404) { notFound(); return null; } return r.ok ? r.json() : null; })
       .then((data) => {
+        if (!data) return;
         setPr(data.pr);
         setLines(data.lines ?? []);
         setPrType(data.pr_type ?? "MPR");
@@ -152,8 +157,8 @@ export default function PRDetailPage() {
 
   async function handleAction() {
     if (!action || !user) return;
-    if (action === "REJECTED" && !remarks.trim()) {
-      setActionError("Remarks are required when rejecting.");
+    if ((action === "REJECTED" || action === "SEND_BACK") && !remarks.trim()) {
+      setActionError("Remarks are required for this action.");
       return;
     }
     setSubmitting(true);
@@ -173,7 +178,8 @@ export default function PRDetailPage() {
       const result = await res.json();
       if (!res.ok) throw new Error(result.error ?? "Action failed");
       setActionDone(true);
-      setPr((prev) => prev ? { ...prev, STATUS: action } : prev);
+      const newStatus = action === "SEND_BACK" ? "REVISION_REQUESTED" : action;
+      setPr((prev) => prev ? { ...prev, STATUS: newStatus } : prev);
       setAction(null);
     } catch (err) {
       setActionError(err instanceof Error ? err.message : "Action failed");
@@ -190,14 +196,6 @@ export default function PRDetailPage() {
     );
   }
 
-  if (!pr) {
-    return (
-      <div className="text-center py-20 text-text-secondary">
-        <AlertTriangle className="w-10 h-10 mx-auto mb-3 opacity-30" />
-        <p>PR not found.</p>
-      </div>
-    );
-  }
 
   const prId    = pr.PR_ID ?? pr.SPR_ID ?? id;
   const prDate  = pr.PR_DATE ?? pr.SPR_DATE ?? "—";
@@ -241,13 +239,24 @@ export default function PRDetailPage() {
           {status === "APPROVED" && <CheckCircle2 className="w-3.5 h-3.5" />}
           {status === "REJECTED" && <XCircle className="w-3.5 h-3.5" />}
           {status === "SUBMITTED" && <Clock className="w-3.5 h-3.5" />}
-          {status}
+          {status === "REVISION_REQUESTED" && <MessageSquare className="w-3.5 h-3.5" />}
+          {status === "REVISION_REQUESTED" ? "Revision Requested" : status}
         </span>
       </div>
 
       {actionDone && (
         <div className="flex items-center gap-2 p-3 bg-success/10 border border-success/30 rounded-sm text-sm text-success font-medium">
           <CheckCircle2 className="w-4 h-4" /> PR has been {pr.STATUS?.toLowerCase()}. The requestor will be notified.
+        </div>
+      )}
+
+      {pr.AI_EXTRACTED === "OVERRIDDEN" && (
+        <div className="flex items-start gap-3 p-4 bg-amber-50 border border-amber-300 rounded-sm">
+          <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+          <div>
+            <p className="text-sm font-bold text-amber-800">AI Data Modified</p>
+            <p className="text-xs text-amber-700 mt-0.5">The requestor has manually edited one or more fields that were auto-filled by AI. Review highlighted lines carefully before approving.</p>
+          </div>
         </div>
       )}
 
@@ -328,10 +337,15 @@ export default function PRDetailPage() {
                     const gst  = parseFloat(l.GST_PERCENT ?? "0");
                     const lineAmt = parseFloat(l.LINE_TOTAL ?? l.LINE_AMOUNT_BEFORE_GST ?? String(qty * rate));
                     return (
-                      <tr key={i} className="hover:bg-primary-50/20">
+                      <tr key={i} className={`${l.AI_OVERRIDDEN === "Y" ? "bg-amber-50/60 border-l-2 border-amber-400" : "hover:bg-primary-50/20"}`}>
                         <td className="px-4 py-3 text-xs text-text-secondary text-center">{l.LINE_NUMBER ?? i + 1}</td>
                         <td className="px-4 py-3 text-xs font-medium text-primary-900">
-                          {l.ITEM_NAME ?? l.ITEM_DESCRIPTION ?? l.SERVICE_DESCRIPTION ?? "—"}
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span>{l.ITEM_NAME ?? l.ITEM_DESCRIPTION ?? l.SERVICE_DESCRIPTION ?? "—"}</span>
+                            {l.AI_OVERRIDDEN === "Y" && (
+                              <span className="inline-flex items-center gap-0.5 text-[9px] font-bold text-amber-700 bg-amber-100 border border-amber-200 px-1.5 py-0.5 rounded-sm">✏ AI Edited</span>
+                            )}
+                          </div>
                           {(l.HSN_CODE || l.SAC_CODE) && (
                             <span className="ml-1.5 font-mono text-[10px] text-text-secondary">
                               {l.HSN_CODE ?? l.SAC_CODE}
@@ -437,6 +451,16 @@ export default function PRDetailPage() {
                   <XCircle className="w-4 h-4" /> Reject
                 </button>
               </div>
+              <button
+                onClick={() => setAction(action === "SEND_BACK" ? null : "SEND_BACK")}
+                className={`w-full flex items-center justify-center gap-1.5 h-9 text-xs font-bold rounded-sm border transition-colors ${
+                  action === "SEND_BACK"
+                    ? "bg-amber-600 text-white border-amber-600"
+                    : "bg-surface text-amber-700 border-amber-400 hover:bg-amber-50"
+                }`}
+              >
+                <MessageSquare className="w-4 h-4" /> Send Back for Revision
+              </button>
 
               {action && (
                 <div className="space-y-3">
@@ -448,7 +472,11 @@ export default function PRDetailPage() {
                       value={remarks}
                       onChange={(e) => setRemarks(e.target.value)}
                       rows={3}
-                      placeholder={action === "APPROVED" ? "Optional comments…" : "Reason for rejection (required)…"}
+                      placeholder={
+                        action === "APPROVED" ? "Optional comments…"
+                        : action === "SEND_BACK" ? "Reason for sending back (required)…"
+                        : "Reason for rejection (required)…"
+                      }
                       className="w-full rounded-sm border border-border focus:ring-1 focus:ring-primary-600 text-xs p-2 outline-none resize-none"
                     />
                   </div>
@@ -465,13 +493,17 @@ export default function PRDetailPage() {
                     className={`w-full h-9 flex items-center justify-center gap-2 text-sm font-bold rounded-sm transition-colors disabled:opacity-50 ${
                       action === "APPROVED"
                         ? "bg-success hover:bg-success/90 text-white"
-                        : "bg-danger hover:bg-danger/90 text-white"
+                        : action === "SEND_BACK"
+                          ? "bg-amber-600 hover:bg-amber-700 text-white"
+                          : "bg-danger hover:bg-danger/90 text-white"
                     }`}
                   >
                     {submitting ? (
                       <><Loader2 className="w-4 h-4 animate-spin" /> Processing…</>
                     ) : action === "APPROVED" ? (
                       <><CheckCircle2 className="w-4 h-4" /> Confirm Approval</>
+                    ) : action === "SEND_BACK" ? (
+                      <><MessageSquare className="w-4 h-4" /> Confirm Send Back</>
                     ) : (
                       <><XCircle className="w-4 h-4" /> Confirm Rejection</>
                     )}
@@ -544,9 +576,20 @@ export default function PRDetailPage() {
           )}
 
           {/* PR not submitted yet — actions for the requestor */}
-          {status === "DRAFT" && isRequestor && (
-            <div className="enterprise-card p-4 bg-warning/5 border border-warning/20 space-y-3">
-              <p className="text-xs text-warning-800 font-medium">This PR is still in Draft and has not been submitted for approval.</p>
+          {(status === "DRAFT" || status === "REVISION_REQUESTED") && isRequestor && (
+            <div className={`enterprise-card p-4 space-y-3 ${status === "REVISION_REQUESTED" ? "bg-amber-50/60 border border-amber-300" : "bg-warning/5 border border-warning/20"}`}>
+              {status === "REVISION_REQUESTED" ? (
+                <div>
+                  <p className="text-xs text-amber-800 font-bold mb-1">Revision Requested</p>
+                  {pr.REJECTION_REMARKS && (
+                    <p className="text-xs text-amber-700">
+                      <strong>{pr.ASSIGNED_APPROVER_NAME ?? "Approver"}</strong> has requested changes: &ldquo;{pr.REJECTION_REMARKS}&rdquo;
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <p className="text-xs text-warning-800 font-medium">This PR is still in Draft and has not been submitted for approval.</p>
+              )}
               {draftSubmitError && (
                 <p className="text-xs text-danger flex items-center gap-1">
                   <XCircle className="w-3.5 h-3.5" /> {draftSubmitError}
@@ -557,7 +600,7 @@ export default function PRDetailPage() {
                   onClick={() => router.push(`/pr/${prType === "SPR" ? "spr" : "mpr"}/edit/${id}`)}
                   className="flex-1 flex items-center justify-center gap-1.5 h-9 text-xs font-bold rounded-sm border border-primary-200 bg-surface hover:bg-primary-50 text-primary-700 transition-colors"
                 >
-                  <Pencil className="w-3.5 h-3.5" /> Edit Draft
+                  <Pencil className="w-3.5 h-3.5" /> {status === "REVISION_REQUESTED" ? "Edit & Resubmit" : "Edit Draft"}
                 </button>
                 <button
                   onClick={handleSubmitDraft}

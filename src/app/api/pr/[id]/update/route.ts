@@ -42,8 +42,8 @@ export async function PATCH(
     const rows = await readSheet(sheet);
     const pr   = rows.find((r) => r[idField] === id);
     if (!pr) return NextResponse.json({ error: "PR not found" }, { status: 404 });
-    if (pr.STATUS !== "DRAFT")
-      return NextResponse.json({ error: "Only DRAFT PRs can be updated" }, { status: 400 });
+    if (!["DRAFT", "REVISION_REQUESTED"].includes(pr.STATUS))
+      return NextResponse.json({ error: "Only DRAFT or REVISION_REQUESTED PRs can be updated" }, { status: 400 });
 
     const now    = new Date().toISOString();
     const status = submit ? "SUBMITTED" : "DRAFT";
@@ -109,6 +109,11 @@ export async function PATCH(
       const totalGst       = lines.reduce((s: number, l: any) => s + (parseFloat(l.qty) * parseFloat(l.rate) * parseFloat(l.gst_percent)) / 100, 0);
       const totalWithGst   = totalBeforeGst + totalGst;
 
+      const anyLineOverridden = lines.some((l: any) => l.ai_overridden === "Y");
+      const aiExtractedValue = anyLineOverridden ? "OVERRIDDEN"
+        : (body.ai_extracted === "Y" || body.ai_extracted === true) ? "Y"
+        : pr.AI_EXTRACTED || "N";
+
       await updateRowWhere("MPR", "PR_ID", id, {
         CATEGORY:                 category ?? pr.CATEGORY ?? "",
         PURPOSE:                  purpose ?? pr.PURPOSE ?? "",
@@ -124,6 +129,7 @@ export async function PATCH(
         QUOTATION_URL:            quotationUrl,
         PROFORMA_INVOICE_URL:     proformaUrl,
         SUPPORTING_DOC_URL:       supportingUrl,
+        AI_EXTRACTED:             aiExtractedValue,
         TOTAL_AMOUNT_BEFORE_GST:  totalBeforeGst,
         TOTAL_GST_AMOUNT:         totalGst,
         TOTAL_AMOUNT_WITH_GST:    totalWithGst,
@@ -166,6 +172,7 @@ export async function PATCH(
             LAST_PURCHASE_PRICE:    lastPrice,
             PRICE_DEVIATION_PCT:    deviationPct,
             PRICE_DEVIATION_FLAG:   deviationFlag,
+            AI_OVERRIDDEN:          line.ai_overridden ?? "",
             REMARKS:                "",
           });
         }

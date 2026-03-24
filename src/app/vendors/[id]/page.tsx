@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, notFound } from "next/navigation";
 import {
   ArrowLeft, Building2, MapPin, Banknote, FileText,
   CheckCircle2, XCircle, Clock, ExternalLink, Loader2,
@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { useCurrentUser } from "@/components/auth/AuthProvider";
 import { fmtDate } from "@/lib/utils";
+import { useUserNames, resolveUser } from "@/lib/useUserNames";
 
 type Vendor = Record<string, string>;
 type SubProfile = Record<string, string>;
@@ -28,11 +29,11 @@ function RefVerifiedBadge({ value }: { value: string }) {
   return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold bg-yellow-100 text-yellow-800 border border-yellow-200"><Clock className="w-3 h-3" /> Pending</span>;
 }
 
-function InfoRow({ label, value }: { label: string; value?: string }) {
+function InfoRow({ label, value, valueClassName }: { label: string; value?: string; valueClassName?: string }) {
   return (
-    <div className="flex flex-col gap-0.5">
-      <span className="text-[10px] uppercase tracking-wider font-bold text-text-secondary">{label}</span>
-      <span className="text-sm text-primary-900 font-medium">{value || "—"}</span>
+    <div className="flex flex-col gap-0.5 min-w-0">
+      <span className="text-[10px] uppercase tracking-wider font-bold text-text-secondary truncate" title={label}>{label}</span>
+      <span className={`text-sm text-primary-900 font-medium ${valueClassName || "break-words"}`} title={value}>{value || "—"}</span>
     </div>
   );
 }
@@ -102,6 +103,7 @@ export default function VendorDetailPage() {
 
   const [vendor, setVendor]           = useState<Vendor | null>(null);
   const [subProfiles, setSubProfiles] = useState<SubProfile[]>([]);
+  const userNames = useUserNames([vendor?.REGISTERED_BY, vendor?.APPROVED_BY]);
   const [loading, setLoading]         = useState(true);
   const [fetchError, setFetchError]   = useState("");
 
@@ -134,8 +136,9 @@ export default function VendorDetailPage() {
     if (!id) return;
     setLoading(true);
     fetch(`/api/vendors/${id}`)
-      .then((r) => r.json())
+      .then((r) => { if (r.status === 404) { notFound(); return null; } return r.ok ? r.json() : null; })
       .then((data) => {
+        if (!data) return;
         if (data.vendor) {
           setVendor(data.vendor);
           setSubProfiles(data.subProfiles ?? []);
@@ -315,7 +318,7 @@ export default function VendorDetailPage() {
             </div>
             <div className="p-5 grid grid-cols-2 sm:grid-cols-3 gap-4">
               <InfoRow label="Contact Person" value={vendor.CONTACT_PERSON} />
-              <InfoRow label="Email"          value={vendor.EMAIL} />
+              <InfoRow label="Email"          value={vendor.EMAIL} valueClassName="truncate" />
               <InfoRow label="Phone"          value={vendor.PHONE} />
               <InfoRow label="Address"        value={vendor.ADDRESS} />
               <InfoRow label="City"           value={vendor.CITY} />
@@ -466,9 +469,9 @@ export default function VendorDetailPage() {
           )}
 
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <InfoRow label="Registered By"   value={vendor.REGISTERED_BY} />
+            <InfoRow label="Registered By"   value={resolveUser(userNames, vendor.REGISTERED_BY)} valueClassName="truncate" />
             <InfoRow label="Registered Date" value={fmtDate(vendor.REGISTERED_DATE)} />
-            <InfoRow label="Approved By"     value={vendor.APPROVED_BY} />
+            <InfoRow label="Approved By"     value={resolveUser(userNames, vendor.APPROVED_BY)} valueClassName="truncate" />
             <InfoRow label="Approved Date"   value={fmtDate(vendor.APPROVED_DATE)} />
           </div>
         </div>

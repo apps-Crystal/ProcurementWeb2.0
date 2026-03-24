@@ -4,7 +4,9 @@
  *
  * POST accepts multipart/form-data:
  *   data             — JSON: { sub_profile_label, gstin, billing_address, billing_state,
- *                               bank_name, account_number, ifsc_code, account_type, added_by }
+ *                               bank_name, account_number, ifsc_code, account_type }
+ *
+ * Caller identity is read from JWT middleware headers (x-user-id, x-user-role).
  *   gst_cert         — File (mandatory)
  *   cancelled_cheque — File (mandatory)
  */
@@ -37,6 +39,19 @@ export async function POST(
   try {
     const { id: vendorId } = await params;
 
+    // BUG-VND-005: Read caller identity from JWT headers, not form body
+    const callerId   = req.headers.get("x-user-id")   ?? "SYSTEM";
+    const callerRole = req.headers.get("x-user-role")  ?? "";
+
+    // BUG-VND-006: Role enforcement — only Procurement_Team or System_Admin may add sub-profiles
+    const SUB_PROFILE_ALLOWED_ROLES = ["Procurement_Team", "System_Admin"];
+    if (!SUB_PROFILE_ALLOWED_ROLES.includes(callerRole)) {
+      return NextResponse.json(
+        { error: "Forbidden: only Procurement_Team or System_Admin may add vendor sub-profiles (SOP §11.3)." },
+        { status: 403 }
+      );
+    }
+
     // Verify vendor exists
     const vendors = await readSheet("VENDORS");
     const vendor  = vendors.find((r) => r.VENDOR_ID === vendorId);
@@ -57,7 +72,6 @@ export async function POST(
       account_number,
       ifsc_code,
       account_type = "Current",
-      added_by,
     } = JSON.parse(dataRaw);
 
     if (!sub_profile_label.trim()) return NextResponse.json({ error: "Sub-Profile Label is required" }, { status: 400 });
@@ -97,17 +111,17 @@ export async function POST(
       IS_PRIMARY:              "N",
       STATUS:                  "ACTIVE",
       DEACTIVATION_REASON:     "",
-      CREATED_BY:              added_by ?? "SYSTEM",
+      CREATED_BY:              callerId,
       CREATED_DATE:            now,
       VERIFIED_BY:             "",
       VERIFIED_DATE:           "",
-      LAST_UPDATED_BY:         added_by ?? "SYSTEM",
+      LAST_UPDATED_BY:         callerId,
       LAST_UPDATED_DATE:       now,
       REMARKS:                 "",
     });
 
     await writeAuditLog({
-      userId:   added_by ?? "SYSTEM",
+      userId:   callerId,
       module:   "VENDORS",
       recordId: vendorId,
       action:   "SUB_PROFILE_ADDED",

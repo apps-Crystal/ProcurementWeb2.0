@@ -18,6 +18,16 @@ import { NextRequest, NextResponse } from "next/server";
 import { readSheet, appendRowByFields, getNextSeq, generateId, writeAuditLog } from "@/lib/sheets";
 import { uploadFileToDrive } from "@/lib/drive";
 
+// BUG-SPR-003: XSS sanitization helper (mirrors mpr/route.ts)
+function sanitize(input: unknown): string {
+  return String(input ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#x27;");
+}
+
 export async function GET() {
   const rows = await readSheet("SPR");
   return NextResponse.json({ sprs: rows });
@@ -35,8 +45,6 @@ export async function POST(req: NextRequest) {
 
     const {
       requestor_user_id,
-      requestor_name,
-      requestor_site,
       service_category,
       service_subcategory = "",
       service_description,
@@ -60,6 +68,12 @@ export async function POST(req: NextRequest) {
       rate,
       gst_percent = 18,
       draft = false,
+      // BUG-SPR-005: financial/contractual fields previously ignored
+      advance_percent,
+      credit_period_days,
+      retention_amount,
+      payment_schedule_type,
+      amc_billing_frequency,
     } = body;
 
     if (!requestor_user_id) {
@@ -76,6 +90,35 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // BUG-SPR-004: Validate requestor exists; auto-populate name/site from USERS
+    const allUsers = await readSheet("USERS");
+    const validUser = allUsers.find((u: any) => u.USER_ID === requestor_user_id);
+    if (!validUser) {
+      return NextResponse.json(
+        { error: `requestor_user_id '${requestor_user_id}' not found in USERS` },
+        { status: 400 }
+      );
+    }
+    const safeRequestorName = sanitize(validUser.FULL_NAME ?? "");
+    const safeRequestorSite = sanitize(validUser.SITE ?? "");
+
+    // BUG-SPR-002: Numeric validation for rate and quantity
+    const parsedRate = parseFloat(String(rate));
+    const parsedQty  = parseFloat(String(quantity ?? "1"));
+
+    if (!draft && (isNaN(parsedRate) || parsedRate <= 0)) {
+      return NextResponse.json(
+        { error: "rate must be a positive number" },
+        { status: 400 }
+      );
+    }
+    if (isNaN(parsedQty) || parsedQty <= 0) {
+      return NextResponse.json(
+        { error: "quantity must be a positive number" },
+        { status: 400 }
+      );
+    }
+
     const quotationFile = formData.get("quotation") as File | null;
     if (!draft && !quotationFile) {
       return NextResponse.json(
@@ -86,9 +129,22 @@ export async function POST(req: NextRequest) {
 
     const scopeDocFile = formData.get("scope_doc") as File | null;
 
+    // BUG-SPR-003: Sanitize all free-text fields before storage
+    const safeServiceDescription = sanitize(service_description ?? "");
+    const safeServicePurpose      = sanitize(service_purpose ?? "");
+    const safeAmcScope            = sanitize(amc_scope ?? "");
+    const safeConsultantName      = sanitize(consultant_name ?? "");
+    const safeMilestoneTags       = sanitize(milestone_tags ?? "");
+    const safeProjectCode         = sanitize(project_code ?? "");
+    const safeVendorName          = sanitize(vendor_name ?? "");
+
     // Generate SPR ID first — needed for Drive folder name
-    const seq = await getNextSeq("SPR");
-    const sprId = generateId("SPR", seq);
+    let seq = await getNextSeq("SPR");
+    let sprId = generateId("SPR", seq);
+    const existingSPR = await readSheet("SPR");
+    if (existingSPR.some((r: any) => r.SPR_ID === sprId)) {
+      sprId = generateId("SPR", await getNextSeq("SPR"));
+    }
     const now = new Date().toISOString();
 
     // ── Upload files to Drive: ROOT/PR/<SPR_ID>/ ─────────────────────────────
@@ -104,44 +160,47 @@ export async function POST(req: NextRequest) {
       scopeDocUrl = scopeUp.web_view_link;
     }
 
-    // ── Calculate totals ──────────────────────────────────────────────────────
-    const qty = parseFloat(String(quantity));
-    const rt = parseFloat(String(rate));
-    const gst = parseFloat(String(gst_percent));
-    const totalBeforeGst = qty * rt;
-    const totalGst = (totalBeforeGst * gst) / 100;
-    const totalWithGst = totalBeforeGst + totalGst;
+    // ── Calculate totals (BUG-SPR-002: use validated parsedRate/parsedQty) ───
+    const gst            = parseFloat(String(gst_percent));
+    const totalBeforeGst = parsedQty * parsedRate;
+    const totalGst       = (totalBeforeGst * gst) / 100;
+    const totalWithGst   = totalBeforeGst + totalGst;
 
     // ── Write SPR row to Sheets ───────────────────────────────────────────────
     await appendRowByFields("SPR", {
       SPR_ID:                       sprId,
       SPR_DATE:                     now.slice(0, 10),
-      PR_VERSION:                   "1",
+      SPR_VERSION:                  "1",                         // BUG-SPR-001: was PR_VERSION (wrong key)
       REQUESTOR_USER_ID:            requestor_user_id,
-      REQUESTOR_NAME:               requestor_name,
-      REQUESTOR_SITE:               requestor_site,
+      REQUESTOR_NAME:               safeRequestorName,           // BUG-SPR-004
+      REQUESTOR_SITE:               safeRequestorSite,           // BUG-SPR-004
       SERVICE_CATEGORY:             service_category,
       SERVICE_SUBCATEGORY:          service_subcategory,
-      SERVICE_DESCRIPTION:          service_description,
-      SERVICE_PURPOSE:              service_purpose,
+      SERVICE_DESCRIPTION:          safeServiceDescription,      // BUG-SPR-003
+      SERVICE_PURPOSE:              safeServicePurpose,          // BUG-SPR-003
       VENDOR_ID:                    vendor_id,
-      VENDOR_NAME:                  vendor_name,
+      VENDOR_NAME:                  safeVendorName,              // BUG-SPR-003
       PAYMENT_TERMS:                payment_terms,
+      ADVANCE_PERCENT:              advance_percent              ?? "",  // BUG-SPR-005
+      CREDIT_PERIOD_DAYS:           credit_period_days           ?? "",  // BUG-SPR-005
+      RETENTION_AMOUNT:             retention_amount             ?? "",  // BUG-SPR-005
+      PAYMENT_SCHEDULE_TYPE:        payment_schedule_type        ?? "",  // BUG-SPR-005
+      AMC_BILLING_FREQUENCY:        amc_billing_frequency        ?? "",  // BUG-SPR-005
       CONTRACT_START_DATE:          contract_start_date,
       CONTRACT_END_DATE:            contract_end_date,
       AMC_VALUE:                    amc_value,
-      AMC_SCOPE:                    amc_scope,
+      AMC_SCOPE:                    safeAmcScope,                // BUG-SPR-003
       RENEWAL_ALERT_SENT:           "N",
-      PROJECT_CODE:                 project_code,
-      MILESTONE_TAGS:               milestone_tags,
+      PROJECT_CODE:                 safeProjectCode,             // BUG-SPR-003
+      MILESTONE_TAGS:               safeMilestoneTags,           // BUG-SPR-003
       PAYMENT_LINKED_TO_MILESTONES: payment_linked_to_milestones,
-      CONSULTANT_NAME:              consultant_name,
+      CONSULTANT_NAME:              safeConsultantName,          // BUG-SPR-003
       ENGAGEMENT_TYPE:              engagement_type,
       SAC_CODE:                     sac_code,
       TDS_APPLICABLE:               tds_applicable,
       TDS_SECTION:                  tds_section,
-      QUANTITY:                     quantity,
-      RATE:                         rate,
+      QUANTITY:                     parsedQty,                   // BUG-SPR-002
+      RATE:                         parsedRate,                  // BUG-SPR-002
       GST_PERCENT:                  gst_percent,
       TOTAL_AMOUNT_BEFORE_GST:      totalBeforeGst,
       TOTAL_GST_AMOUNT:             totalGst,

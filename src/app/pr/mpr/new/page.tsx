@@ -23,6 +23,8 @@ interface LineItem {
   hsn_code: string;
   item_purpose: string;
   last_purchase_price: number;
+  _aiOriginal?: { qty: number; rate: number; gst_percent: number; item_description: string; hsn_code: string; uom: string };
+  _aiOverridden?: boolean;
 }
 
 interface PaymentTranche {
@@ -152,7 +154,21 @@ export default function NewMPR() {
   };
 
   const updateLine = (id: number, field: keyof LineItem, value: string | number) => {
-    setLines(lines.map((l) => l.id === id ? { ...l, [field]: value } : l));
+    setLines(lines.map((l) => {
+      if (l.id !== id) return l;
+      const updated = { ...l, [field]: value };
+      if (updated._aiOriginal) {
+        const o = updated._aiOriginal;
+        updated._aiOverridden =
+          String(updated.qty) !== String(o.qty) ||
+          String(updated.rate) !== String(o.rate) ||
+          String(updated.gst_percent) !== String(o.gst_percent) ||
+          updated.item_description !== o.item_description ||
+          updated.hsn_code !== o.hsn_code ||
+          updated.uom !== o.uom;
+      }
+      return updated;
+    }));
   };
 
   const subtotal = lines.reduce((s, l) => s + l.qty * l.rate, 0);
@@ -176,11 +192,18 @@ export default function NewMPR() {
       if (!res.ok) throw new Error(data.error);
       const { extracted } = data;
       if (extracted.lines?.length) {
-        setLines(extracted.lines.map((l: any, i: number) => ({
-          id: i + 1, item_description: l.description ?? "", uom: l.uom ?? "Nos",
-          qty: l.qty ?? 0, rate: l.rate ?? 0, gst_percent: l.gst_percent ?? 18,
-          hsn_code: l.hsn_code ?? "", item_purpose: "", last_purchase_price: 0,
-        })));
+        setLines(extracted.lines.map((l: any, i: number) => {
+          const lineData = {
+            id: i + 1, item_description: l.description ?? "", uom: l.uom ?? "Nos",
+            qty: l.qty ?? 0, rate: l.rate ?? 0, gst_percent: l.gst_percent ?? 18,
+            hsn_code: l.hsn_code ?? "", item_purpose: "", last_purchase_price: 0,
+          };
+          return {
+            ...lineData,
+            _aiOriginal: { qty: lineData.qty, rate: lineData.rate, gst_percent: lineData.gst_percent, item_description: lineData.item_description, hsn_code: lineData.hsn_code, uom: lineData.uom },
+            _aiOverridden: false,
+          };
+        }));
         setAiExtracted(true);
       } else {
         setSubmitError("AI could not extract line items. Please enter them manually.");
@@ -218,14 +241,24 @@ export default function NewMPR() {
     payment_linked_to_milestone: paymentScheduleType === "Structured" ? "Y" : "N",
     // Structured schedule serialised as JSON string for the API
     payment_schedule: paymentScheduleType === "Structured" ? JSON.stringify(tranches) : "",
-    lines: lines.map(({ id: _id, ...l }) => l),
+    lines: lines.map(({ id: _id, _aiOriginal, _aiOverridden, ...l }) => ({
+      ...l,
+      ai_overridden: _aiOverridden ? "Y" : "",
+    })),
     draft,
-    ai_extracted: aiExtracted,
+    ai_extracted: !aiExtracted ? "N" : lines.some(l => l._aiOverridden) ? "OVERRIDDEN" : "Y",
   });
 
   // ── Save Draft ────────────────────────────────────────────────────────────
   const handleSaveDraft = async () => {
-    setSubmitError(""); setSavingDraft(true);
+    setSubmitError("");
+    // Validate line data even for drafts (if lines are filled in)
+    const hasAnyLineData = lines.some(l => l.item_description || l.qty > 0 || l.rate > 0);
+    if (hasAnyLineData) {
+      const lineErr = validateLines(true); // forDraft=true: HSN not required
+      if (lineErr) return setSubmitError(lineErr);
+    }
+    setSavingDraft(true);
     try {
       const fd = new FormData();
       fd.append("data", JSON.stringify(buildPayload(true)));
@@ -242,6 +275,42 @@ export default function NewMPR() {
     } finally { setSavingDraft(false); }
   };
 
+  // ── Shared line-item validation (mirrors API rules) ───────────────────────
+  const VALID_GST_RATES = [0, 5, 12, 18, 28];
+  const MAX_QTY  = 1_000_000;
+  const MAX_RATE = 100_000_000;
+
+  const validateLines = (forDraft = false): string | null => {
+    for (const [i, l] of lines.entries()) {
+      const ln = i + 1;
+      const desc = (l.item_description ?? "").trim();
+      const hsn  = (l.hsn_code ?? "").trim();
+
+      if (desc.length < 3)
+        return `Line ${ln}: item description is required (minimum 3 characters).`;
+
+      if (!Number.isFinite(l.qty) || l.qty <= 0)
+        return `Line ${ln}: quantity must be a positive number.`;
+      if (l.qty > MAX_QTY)
+        return `Line ${ln}: quantity exceeds maximum of ${MAX_QTY.toLocaleString("en-IN")}.`;
+
+      if (!Number.isFinite(l.rate) || l.rate <= 0)
+        return `Line ${ln}: rate must be a positive number.`;
+      if (l.rate > MAX_RATE)
+        return `Line ${ln}: rate exceeds maximum of ₹${MAX_RATE.toLocaleString("en-IN")}.`;
+
+      if (Number.isFinite(l.qty) && Number.isFinite(l.rate) && l.qty * l.rate > 1_000_000_000)
+        return `Line ${ln}: line total exceeds ₹100 crore limit.`;
+
+      if (!VALID_GST_RATES.includes(l.gst_percent))
+        return `Line ${ln}: GST must be 0%, 5%, 12%, 18%, or 28% (got ${l.gst_percent}%).`;
+
+      if (!forDraft && (!hsn || !/^\d{4,8}$/.test(hsn)))
+        return `Line ${ln}: HSN/SAC code is required (4–8 digit number).`;
+    }
+    return null;
+  };
+
   // ── Submit ────────────────────────────────────────────────────────────────
   const handleSubmit = async () => {
     setSubmitError("");
@@ -250,8 +319,8 @@ export default function NewMPR() {
     if (!deliveryDate) return setSubmitError("Expected Delivery Date is required.");
     if (!quotationFile) return setSubmitError("Vendor Quotation is mandatory (SOP §5.1).");
     if (!proformaFile) return setSubmitError("Proforma Invoice is mandatory (SOP §5.1).");
-    if (lines.some((l) => !l.item_description || l.qty <= 0 || l.rate <= 0))
-      return setSubmitError("All line items must have a description, quantity, and rate.");
+    const lineErr = validateLines(false);
+    if (lineErr) return setSubmitError(lineErr);
     if (paymentScheduleType === "Structured" && !isTrancheValid)
       return setSubmitError(`Payment schedule tranches must total 100%. Currently: ${totalTranchePercent}%.`);
 
@@ -732,19 +801,24 @@ export default function NewMPR() {
                 )}
               </div>
               <div className="flex items-center gap-2">
-                {aiExtracted ? (
+                {aiExtracted && (
                   <button onClick={handleClearAiExtract}
                     className="h-7 px-3 bg-surface border border-warning/40 text-warning-800 hover:bg-warning/10 text-xs font-semibold rounded-sm transition-colors flex items-center gap-1">
                     <RotateCcw className="w-3 h-3" /> Enter Manually
                   </button>
-                ) : (
-                  <button onClick={addLine} disabled={!quotationFile}
-                    className="h-7 px-3 bg-surface border border-primary-200 text-primary-700 hover:bg-primary-50 text-xs font-semibold rounded-sm transition-colors flex items-center gap-1 shadow-sm disabled:opacity-40 disabled:cursor-not-allowed">
-                    <Plus className="w-3.5 h-3.5" /> Add Row
-                  </button>
                 )}
+                <button onClick={addLine} disabled={!quotationFile}
+                  className="h-7 px-3 bg-surface border border-primary-200 text-primary-700 hover:bg-primary-50 text-xs font-semibold rounded-sm transition-colors flex items-center gap-1 shadow-sm disabled:opacity-40 disabled:cursor-not-allowed">
+                  <Plus className="w-3.5 h-3.5" /> Add Row
+                </button>
               </div>
             </div>
+            {aiExtracted && lines.some(l => l._aiOverridden) && (
+              <div className="flex items-center gap-2 px-4 py-2 bg-amber-50 border-b border-amber-200 text-xs text-amber-800 font-medium">
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0 text-amber-500" />
+                You have edited AI-extracted data on {lines.filter(l => l._aiOverridden).length} line(s). The approver will be notified.
+              </div>
+            )}
 
             {!quotationFile && (
               <div className="flex flex-col items-center justify-center gap-2 py-12 text-text-secondary">
@@ -774,8 +848,13 @@ export default function NewMPR() {
                     const deviation = line.last_purchase_price > 0
                       ? ((line.rate - line.last_purchase_price) / line.last_purchase_price) * 100 : 0;
                     return (
-                      <tr key={line.id} className="hover:bg-primary-50/30 transition-colors">
-                        <td className="px-3 py-2 text-xs font-medium text-text-secondary text-center">{index + 1}</td>
+                      <tr key={line.id} className={`transition-colors ${line._aiOverridden ? "border-l-2 border-amber-400 bg-amber-50/40" : "hover:bg-primary-50/30"}`}>
+                        <td className="px-3 py-2 text-xs font-medium text-text-secondary text-center">
+                          {index + 1}
+                          {line._aiOverridden && (
+                            <span className="block text-[8px] font-bold text-amber-600 bg-amber-100 rounded-sm px-0.5 mt-0.5 leading-tight">AI Edited</span>
+                          )}
+                        </td>
                         <td className="px-3 py-2">
                           <input type="text" className="w-full bg-transparent border-0 focus:ring-1 focus:ring-primary-500 rounded-sm px-1 py-1 text-xs"
                             placeholder="Describe item..." value={line.item_description}
@@ -797,30 +876,25 @@ export default function NewMPR() {
                           </select>
                         </td>
                         <td className="px-3 py-2">
-                          <input type="number" readOnly={aiExtracted}
-                            className={`w-full border rounded-sm px-2 py-1 text-xs text-right ${aiExtracted ? "bg-primary-50/80 border-transparent text-primary-700 font-semibold pointer-events-none" : "bg-surface border-border focus:ring-1 focus:ring-primary-500"}`}
+                          <input type="number"
+                            className="w-full border rounded-sm px-2 py-1 text-xs text-right bg-surface border-border focus:ring-1 focus:ring-primary-500"
                             value={line.qty || ""}
-                            onChange={(e) => !aiExtracted && updateLine(line.id, "qty", parseFloat(e.target.value) || 0)} />
+                            onChange={(e) => updateLine(line.id, "qty", parseFloat(e.target.value) || 0)} />
                         </td>
                         <td className="px-3 py-2">
-                          <input type="number" readOnly={aiExtracted}
-                            className={`w-full border rounded-sm px-2 py-1 text-xs text-right ${aiExtracted ? "bg-primary-50/80 border-transparent text-primary-700 font-semibold pointer-events-none" : "bg-surface border-border focus:ring-1 focus:ring-primary-500"}`}
+                          <input type="number"
+                            className="w-full border rounded-sm px-2 py-1 text-xs text-right bg-surface border-border focus:ring-1 focus:ring-primary-500"
                             value={line.rate || ""}
-                            onChange={(e) => !aiExtracted && updateLine(line.id, "rate", parseFloat(e.target.value) || 0)} />
+                            onChange={(e) => updateLine(line.id, "rate", parseFloat(e.target.value) || 0)} />
                         </td>
                         <td className="px-3 py-2">
-                          {aiExtracted ? (
-                            <input readOnly className="w-full bg-primary-50/80 border-transparent text-primary-700 font-semibold pointer-events-none rounded-sm px-1 py-1 text-xs text-center"
-                              value={`${line.gst_percent}%`} />
-                          ) : (
-                            <select className="w-full bg-surface border border-border focus:ring-1 focus:ring-primary-500 rounded-sm px-1 py-1 text-xs"
-                              value={line.gst_percent} onChange={(e) => updateLine(line.id, "gst_percent", parseFloat(e.target.value))}>
-                              {opts(dropdowns, "GST_PERCENT", [
-                                { value: "0", label: "0" }, { value: "5", label: "5" },
-                                { value: "12", label: "12" }, { value: "18", label: "18" }, { value: "28", label: "28" },
-                              ]).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-                            </select>
-                          )}
+                          <select className="w-full bg-surface border border-border focus:ring-1 focus:ring-primary-500 rounded-sm px-1 py-1 text-xs"
+                            value={line.gst_percent} onChange={(e) => updateLine(line.id, "gst_percent", parseFloat(e.target.value))}>
+                            {opts(dropdowns, "GST_PERCENT", [
+                              { value: "0", label: "0" }, { value: "5", label: "5" },
+                              { value: "12", label: "12" }, { value: "18", label: "18" }, { value: "28", label: "28" },
+                            ]).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                          </select>
                         </td>
                         <td className="px-3 py-2">
                           <input type="text" className="w-full bg-surface border border-border focus:ring-1 focus:ring-primary-500 rounded-sm px-2 py-1 text-xs"
@@ -832,12 +906,10 @@ export default function NewMPR() {
                             value={lineAmount.toLocaleString("en-IN", { minimumFractionDigits: 2 })} />
                         </td>
                         <td className="px-3 py-2 text-center">
-                          {!aiExtracted && (
-                            <button onClick={() => removeLine(line.id)}
-                              className="p-1 text-text-secondary hover:text-danger hover:bg-danger/10 rounded-sm transition-colors">
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          )}
+                          <button onClick={() => removeLine(line.id)}
+                            className="p-1 text-text-secondary hover:text-danger hover:bg-danger/10 rounded-sm transition-colors">
+                            <Trash2 className="w-4 h-4" />
+                          </button>
                         </td>
                       </tr>
                     );

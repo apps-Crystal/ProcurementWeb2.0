@@ -10,6 +10,7 @@ import {
   Receipt,
   CreditCard,
   Flag,
+  MessageSquareWarning,
   Users,
   BarChart3,
   History,
@@ -18,6 +19,7 @@ import {
   ChevronLeft,
   Menu,
   ClipboardCheck,
+  ShieldCheck,
 } from "lucide-react";
 import { useCurrentUser } from "@/components/auth/AuthProvider";
 import { useState } from "react";
@@ -57,7 +59,10 @@ const navItems = [
     icon: PackageCheck,
     roles: ["Warehouse", "Site_Head", "Procurement_Team"],
     children: [
+      { name: "All GRNs", href: "/receipts/grn" },
       { name: "New GRN (F4)", href: "/receipts/grn/new" },
+      { name: "Verify GRN", href: "/receipts/grn/verify", roles: ["Site_Head"] },
+      { name: "All SRNs", href: "/receipts/srn" },
       { name: "New SRN (F5)", href: "/receipts/srn/new" },
       { name: "Non-PO Purchase (F6)", href: "/receipts/non-po/new" },
     ]
@@ -74,13 +79,15 @@ const navItems = [
   {
     name: "Payments",
     icon: CreditCard,
-    roles: ["Accounts", "Finance", "Management"],
+    roles: ["Accounts", "Finance", "Management", "Procurement_Team"],
     children: [
       { name: "Payment Queue", href: "/payments/queue" },
+      { name: "Raise Payment", href: "/payments/raise", roles: ["Accounts", "Finance", "System_Admin"] },
       { name: "Payment History", href: "/payments/history" },
     ]
   },
   { name: "Flags & Disputes", href: "/flags", icon: Flag, roles: ["Site_Head", "Accounts", "Management"] },
+  { name: "Feedback & Bugs", href: "/feedback", icon: MessageSquareWarning, roles: ["All"] },
   {
     name: "Vendors",
     icon: Users,
@@ -90,8 +97,17 @@ const navItems = [
       { name: "Register New (F7)", href: "/vendors/new" },
     ]
   },
-  { name: "Reports", href: "/reports", icon: BarChart3, roles: ["Management", "Procurement_Team", "Accounts", "Finance"] },
+  { name: "Reports", href: "/reports", icon: BarChart3, roles: ["Management", "Procurement_Team", "Procurement_Head", "Accounts", "Finance", "Site_Head"] },
   { name: "Audit Log", href: "/audit", icon: History, roles: ["Management", "Finance"] },
+  {
+    name: "User Management",
+    icon: ShieldCheck,
+    roles: ["System_Admin"],
+    children: [
+      { name: "All Users", href: "/admin/users" },
+      { name: "Create User", href: "/admin/users/new" },
+    ]
+  },
 ];
 
 export function Sidebar() {
@@ -173,7 +189,7 @@ export function Sidebar() {
                     </div>
                     {!isCollapsed && item.children && (
                       <div className="mt-1 space-y-1 pl-9">
-                        {item.children.map((child) => {
+                        {item.children.filter((child) => !("roles" in child) || canAccess((child as {roles?: string[]}).roles ?? ["All"])).map((child) => {
                           const isChildActive = pathname === child.href;
                           return (
                             <Link

@@ -75,7 +75,7 @@ async function getOrCreateFolder(name: string, parentId: string): Promise<string
  *   → ROOT / PR / PR-2503-0001 /
  */
 export async function getEntityFolder(
-  type: "PR" | "GRN" | "SRN" | "INVOICES" | "PO" | "VENDORS",
+  type: "PR" | "GRN" | "SRN" | "INVOICES" | "PO" | "VENDORS" | "FEEDBACK",
   entityId: string
 ): Promise<string> {
   const typeFolder = await getOrCreateFolder(type, ROOT_FOLDER_ID);
@@ -99,7 +99,7 @@ export interface UploadResult {
  */
 export async function uploadFileToDrive(
   file: File,
-  entityType: "PR" | "GRN" | "SRN" | "INVOICES" | "PO" | "VENDORS",
+  entityType: "PR" | "GRN" | "SRN" | "INVOICES" | "PO" | "VENDORS" | "FEEDBACK",
   entityId: string,
   fileNameOverride?: string
 ): Promise<UploadResult> {
@@ -136,7 +136,7 @@ export async function uploadFileToDrive(
  */
 export async function uploadMultipleFiles(
   files: { file: File; nameOverride?: string }[],
-  entityType: "PR" | "GRN" | "SRN" | "INVOICES" | "PO" | "VENDORS",
+  entityType: "PR" | "GRN" | "SRN" | "INVOICES" | "PO" | "VENDORS" | "FEEDBACK",
   entityId: string
 ): Promise<Record<string, UploadResult>> {
   const results: Record<string, UploadResult> = {};

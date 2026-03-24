@@ -24,10 +24,36 @@ import {
 } from "@/lib/sheets";
 import { sendPoDispatch } from "@/lib/email";
 
+const GRN_VALID_STATUSES = ["ISSUED", "OPEN", "PARTIALLY_RECEIVED", "ACKNOWLEDGED", "ACCEPTED"];
+
 export async function GET(req: NextRequest) {
   const status = req.nextUrl.searchParams.get("status");
+  const q      = req.nextUrl.searchParams.get("q")?.toLowerCase().trim() ?? "";
+  const forGrn = req.nextUrl.searchParams.get("for_grn") === "1";
+
   const rows = await readSheet("PO");
-  const filtered = status ? rows.filter((r) => r.STATUS === status) : rows;
+
+  let filtered = rows;
+
+  // When searching for GRN, restrict to statuses that can receive goods
+  if (forGrn) {
+    filtered = filtered.filter((r) => GRN_VALID_STATUSES.includes(r.STATUS));
+  } else if (status) {
+    filtered = filtered.filter((r) => r.STATUS === status);
+  }
+
+  // Full-text search: PO_ID or VENDOR_NAME
+  if (q) {
+    filtered = filtered.filter(
+      (r) =>
+        r.PO_ID?.toLowerCase().includes(q) ||
+        r.VENDOR_NAME?.toLowerCase().includes(q)
+    );
+  }
+
+  // Cap search results to avoid huge payloads
+  if (q) filtered = filtered.slice(0, 20);
+
   return NextResponse.json({ pos: filtered });
 }
 
@@ -111,7 +137,30 @@ export async function POST(req: NextRequest) {
     const lineSheet   = pr_type === "SPR" ? "SPR_LINES" : "MPR_LINES";
     const lineIdField = pr_type === "SPR" ? "SPR_ID"    : "PR_ID";
     const prLines = await readSheet(lineSheet);
-    const myLines = prLines.filter((l) => l[lineIdField] === pr_id);
+    let myLines = prLines.filter((l) => l[lineIdField] === pr_id);
+
+    // SPRs store all line data on the SPR row itself (never writes to SPR_LINES).
+    // Synthesize a single line from the SPR row so PO_LINES gets populated.
+    if (pr_type === "SPR" && myLines.length === 0) {
+      const qty    = parseFloat(String(pr.QUANTITY ?? "1"));
+      const rate   = parseFloat(String(pr.RATE ?? "0"));
+      const gst    = parseFloat(String(pr.GST_PERCENT ?? "0"));
+      const base   = qty * rate;
+      const gstAmt = (base * gst) / 100;
+      myLines = [{
+        ITEM_NAME:              pr.SERVICE_DESCRIPTION ?? pr.SERVICE_CATEGORY ?? "Service",
+        ITEM_DESCRIPTION:       pr.SERVICE_DESCRIPTION ?? "",
+        UNIT_OF_MEASURE:        "Service",
+        QUANTITY:               String(qty),
+        RATE:                   String(rate),
+        GST_PERCENT:            String(gst),
+        HSN_SAC_CODE:           pr.SAC_CODE ?? "",
+        LINE_AMOUNT_BEFORE_GST: String(base),
+        GST_AMOUNT:             String(gstAmt),
+        LINE_TOTAL:             String(base + gstAmt),
+        REMARKS:                "",
+      }];
+    }
 
     // Compute totals from lines
     const subtotal  = myLines.reduce((s, l) =>
@@ -125,8 +174,21 @@ export async function POST(req: NextRequest) {
     const advanceAmount     = (grandTotal * advancePct) / 100;
     const hasCustomTerms    = special_commercial_terms.trim().length > 0;
 
-    const seq  = await getNextSeq("PO");
-    const poId = generateId("PO", seq);
+    let seq  = await getNextSeq("PO");
+    let poId = generateId("PO", seq);
+    const existingPO = await readSheet("PO");
+    if (existingPO.some((r: any) => r.PO_ID === poId)) {
+      poId = generateId("PO", await getNextSeq("PO"));
+    }
+
+    // BUG-PO-001: Prevent duplicate PO for the same source PR
+    const duplicatePO = existingPO.find((r: any) => r.SOURCE_PR_ID === pr_id);
+    if (duplicatePO) {
+      return NextResponse.json(
+        { error: `A PO (${duplicatePO.PO_ID}) already exists for PR ${pr_id}. Each approved PR may only generate one PO.` },
+        { status: 409 }
+      );
+    }
     const now  = new Date().toISOString();
 
     await appendRowByFields("PO", {
@@ -148,8 +210,8 @@ export async function POST(req: NextRequest) {
       ADVANCE_PAYMENT_PCT:         advancePct,
       ADVANCE_AMOUNT:              advanceAmount,
       PAYMENT_SCHEDULE:            "",
-      PAYMENT_SCHEDULE_TYPE:       "",
-      PAYMENT_SCHEDULE_TOTAL_PCT:  "",
+      PAYMENT_SCHEDULE_TYPE:       pr.PAYMENT_SCHEDULE_TYPE      ?? "",
+      PAYMENT_SCHEDULE_TOTAL_PCT:  pr.PAYMENT_SCHEDULE_TOTAL_PCT ?? "",
       SUBTOTAL:                    subtotal,
       TOTAL_GST:                   totalGst,
       FREIGHT_GST:                 0,
@@ -158,7 +220,7 @@ export async function POST(req: NextRequest) {
       TC_CUSTOMISED:               hasCustomTerms ? "Y" : "N",
       TC_CUSTOMISATION_NOTES:      special_commercial_terms,
       TC_APPROVED_BY:              "",
-      PO_PDF_URL:                  `/po/${poId}/print`,
+      PO_PDF_URL:                  "",
       CUSTOM_TC_DOC_URL:           "",
       ACK_STATUS:                  "PENDING",
       ACK_TIMESTAMP:               "",
@@ -236,6 +298,18 @@ export async function POST(req: NextRequest) {
         vendorContactName:    contactName,
         vendorEmail:          vendor_email,
         procurementOfficerName: created_by,
+        paymentTerms:         pr.PAYMENT_TERMS ?? "Standard",
+        advancePercent:       advancePct,
+        advanceAmount:        advanceAmount,
+        specialTerms:         special_commercial_terms || "",
+        lines: myLines.map((l) => ({
+          itemDescription: l.ITEM_DESCRIPTION ?? l.ITEM_NAME ?? l.SERVICE_DESCRIPTION ?? "",
+          qty:             l.QUANTITY ?? l.QTY ?? l.ORDERED_QTY ?? 0,
+          uom:             l.UNIT_OF_MEASURE ?? l.UOM ?? "",
+          rate:            l.RATE ?? 0,
+          gstPercent:      l.GST_PERCENT ?? 0,
+          lineTotal:       l.LINE_TOTAL ?? 0,
+        })),
       }).catch((err) => console.error("[email] PO dispatch failed:", err));
     }
 

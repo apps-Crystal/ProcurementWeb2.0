@@ -40,9 +40,24 @@ export async function PATCH(
     }
 
     const { action, remarks, pr_type = "MPR" } = await req.json();
+    const versionKey = pr_type === "SPR" ? "SPR_VERSION" : "PR_VERSION";
 
-    if (!["APPROVED", "REJECTED"].includes(action)) {
-      return NextResponse.json({ error: "action must be APPROVED or REJECTED" }, { status: 400 });
+    if (!["APPROVED", "REJECTED", "SEND_BACK"].includes(action)) {
+      return NextResponse.json({ error: "action must be APPROVED, REJECTED, or SEND_BACK" }, { status: 400 });
+    }
+
+    // Require non-trivial remarks for REJECTED and SEND_BACK
+    if ((action === "REJECTED" || action === "SEND_BACK") && (!remarks || !remarks.trim())) {
+      return NextResponse.json(
+        { error: `Remarks are mandatory when ${action === "REJECTED" ? "rejecting" : "sending back"} a PR. Please provide a reason.` },
+        { status: 400 }
+      );
+    }
+    if ((action === "REJECTED" || action === "SEND_BACK") && remarks.trim().length < 10) {
+      return NextResponse.json(
+        { error: `${action === "REJECTED" ? "Rejection" : "Send-back"} reason must be at least 10 characters to provide meaningful context for the requestor.` },
+        { status: 400 }
+      );
     }
 
     const sheet    = pr_type === "SPR" ? "SPR" : "MPR";
@@ -56,9 +71,12 @@ export async function PATCH(
       return NextResponse.json({ error: "PR not found" }, { status: 404 });
     }
 
-    if (pr.STATUS !== "SUBMITTED") {
+    const allowedStatuses = action === "SEND_BACK"
+      ? ["SUBMITTED", "REVISION_REQUESTED"]
+      : ["SUBMITTED"];
+    if (!allowedStatuses.includes(pr.STATUS)) {
       return NextResponse.json(
-        { error: `PR is in status '${pr.STATUS}' — only SUBMITTED PRs can be approved/rejected.` },
+        { error: `PR is in status '${pr.STATUS}' — cannot perform '${action}'.` },
         { status: 409 }
       );
     }
@@ -78,12 +96,37 @@ export async function PATCH(
     const callerUser = users.find((u) => u.USER_ID === callerId);
     const callerName = callerUser?.FULL_NAME ?? callerId;
 
+    // F-02 — SEND_BACK: set REVISION_REQUESTED so original submitter can edit & resubmit
+    if (action === "SEND_BACK") {
+      await updateRowWhere(sheet, idField, id, {
+        STATUS:                "REVISION_REQUESTED",
+        ASSIGNED_APPROVER_ID:   callerId,
+        ASSIGNED_APPROVER_NAME: callerName,
+        APPROVER_ACTION_DATE:   now,
+        REJECTION_REMARKS:      remarks?.trim() ?? "",
+        [versionKey]:           String((parseInt(pr[versionKey] || "1", 10)) + 1),
+        LAST_UPDATED_BY:        callerId,
+        LAST_UPDATED_DATE:      now,
+      });
+      await writeAuditLog({
+        userId:   callerId,
+        userName: callerName,
+        userRole: callerRole,
+        module:   sheet,
+        recordId: id,
+        action:   "PR_SEND_BACK",
+        remarks,
+      });
+      return NextResponse.json({ success: true, pr_id: id, status: "REVISION_REQUESTED" });
+    }
+
     await updateRowWhere(sheet, idField, id, {
       STATUS:                action,
       ASSIGNED_APPROVER_ID:   callerId,
       ASSIGNED_APPROVER_NAME: callerName,
       APPROVER_ACTION_DATE:   now,
-      APPROVER_REMARKS:       remarks ?? "",
+      APPROVER_REMARKS:       remarks?.trim() ?? "",
+      [versionKey]:           String((parseInt(pr[versionKey] || "1", 10)) + 1),
       LAST_UPDATED_BY:        callerId,
       LAST_UPDATED_DATE:      now,
     });

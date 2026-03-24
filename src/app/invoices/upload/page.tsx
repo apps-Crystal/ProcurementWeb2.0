@@ -24,6 +24,8 @@ export default function InvoiceUpload() {
   const [fileName, setFileName] = useState<string>("");
   const [errorMsg, setErrorMsg] = useState<string>("");
   const [grnSearch, setGrnSearch] = useState("");
+  const [grnError, setGrnError] = useState("");
+  const [grnValidating, setGrnValidating] = useState(false);
   const [processing, setProcessing] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -65,11 +67,34 @@ export default function InvoiceUpload() {
     }
   };
 
+  // F-05: Server-validate GRN before linking
+  const handleGrnLink = async () => {
+    const grn = grnSearch.trim();
+    if (!grn) return;
+    setGrnValidating(true);
+    setGrnError("");
+    try {
+      const res = await fetch(`/api/grn?grn_id=${encodeURIComponent(grn)}`);
+      const data = await res.json();
+      const found = (data.grns ?? []).find((g: Record<string, string>) => g.GRN_ID === grn);
+      if (!found) { setGrnError(`GRN "${grn}" not found.`); return; }
+      if (found.STATUS !== "GRN_VERIFIED") {
+        setGrnError(`GRN status is "${found.STATUS}" — must be GRN_VERIFIED before linking.`);
+        return;
+      }
+      setGrnLinked(true);
+    } catch {
+      setGrnError("Could not validate GRN. Please try again.");
+    } finally {
+      setGrnValidating(false);
+    }
+  };
+
   const handleProcessPayment = async () => {
     if (!invId || !grnLinked) return;
     setProcessing(true);
-    // Navigate to match page with inv_id
-    window.location.href = `/invoices/match?inv_id=${invId}`;
+    // F-03: Pass grn_id to match page so server validates status via matchEngine
+    window.location.href = `/invoices/match?inv_id=${invId}&grn_id=${encodeURIComponent(grnSearch.trim())}`;
   };
 
   const reset = () => {
@@ -79,6 +104,8 @@ export default function InvoiceUpload() {
     setInvId(null);
     setFileName("");
     setErrorMsg("");
+    setGrnSearch("");
+    setGrnError("");
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
@@ -251,19 +278,25 @@ export default function InvoiceUpload() {
                     <input
                       type="text"
                       value={grnSearch}
-                      onChange={(e) => setGrnSearch(e.target.value)}
+                      onChange={(e) => { setGrnSearch(e.target.value); setGrnError(""); }}
+                      onKeyDown={(e) => e.key === "Enter" && handleGrnLink()}
                       className="enterprise-input pl-8"
-                      placeholder="Search GRN-..., SRN-... or PO-..."
+                      placeholder="Enter GRN ID e.g. GRN-2603-0001"
                     />
                   </div>
                   <button
-                    onClick={() => setGrnLinked(true)}
-                    disabled={!grnSearch.trim()}
+                    onClick={handleGrnLink}
+                    disabled={!grnSearch.trim() || grnValidating}
                     className="px-4 py-2 bg-primary-900 text-white font-medium text-sm rounded-sm hover:bg-primary-800 transition-colors disabled:opacity-50"
                   >
-                    Auto-Match
+                    {grnValidating ? "Checking…" : "Link GRN"}
                   </button>
                 </div>
+                {grnError && (
+                  <div className="flex items-center gap-1.5 text-xs text-danger mt-1">
+                    <XCircle className="w-3.5 h-3.5 shrink-0" /> {grnError}
+                  </div>
+                )}
               </div>
             ) : (
               <div className="space-y-4">
